@@ -1,26 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const COLORS = ["red", "yellow", "green", "blue"];
 const VALUES = ["0","1","2","3","4","5","6","7","8","9","skip","reverse","draw2"];
-const WILD_TYPES = ["wild","wild4"];
 
 const COLOR_MAP = {
-  red: { bg: "#E8453C", light: "#FDECEA", text: "#fff", border: "#C0392B" },
-  yellow: { bg: "#F5C518", light: "#FFFBEA", text: "#333", border: "#D4A017" },
-  green: { bg: "#27AE60", light: "#EAFAF1", text: "#fff", border: "#1E8449" },
-  blue: { bg: "#2980B9", light: "#EAF4FB", text: "#fff", border: "#1F618D" },
-  wild: { bg: "#2C2C2C", light: "#F5F5F5", text: "#fff", border: "#111" },
+  red:    { bg: "#E8453C", text: "#fff", border: "#C0392B" },
+  yellow: { bg: "#F5C518", text: "#333", border: "#D4A017" },
+  green:  { bg: "#27AE60", text: "#fff", border: "#1E8449" },
+  blue:   { bg: "#2980B9", text: "#fff", border: "#1F618D" },
+  wild:   { bg: "#2C2C2C", text: "#fff", border: "#111"    },
 };
 
+// ─── Deck ─────────────────────────────────────────────────────────────────────
 function createDeck() {
   const deck = [];
   let id = 0;
   COLORS.forEach(color => {
     VALUES.forEach(val => {
       const count = val === "0" ? 1 : 2;
-      for (let i = 0; i < count; i++) {
-        deck.push({ id: id++, color, value: val });
-      }
+      for (let i = 0; i < count; i++) deck.push({ id: id++, color, value: val });
     });
   });
   for (let i = 0; i < 4; i++) {
@@ -40,10 +38,9 @@ function shuffle(arr) {
 }
 
 function canPlay(card, topCard, activeColor) {
-  const effectiveColor = activeColor || topCard.color;
   if (card.color === "wild") return true;
-  if (card.color === effectiveColor) return true;
-  if (card.value === topCard.value && card.color !== "wild") return true;
+  if (card.color === activeColor) return true;
+  if (card.value === topCard.value) return true;
   return false;
 }
 
@@ -55,12 +52,11 @@ function calcScore(hand) {
   }, 0);
 }
 
+// ─── Bot AI ───────────────────────────────────────────────────────────────────
 function botChooseCard(hand, topCard, activeColor, difficulty) {
   const playable = hand.filter(c => canPlay(c, topCard, activeColor));
   if (playable.length === 0) return null;
-  if (difficulty === "easy") {
-    return playable[Math.floor(Math.random() * playable.length)];
-  }
+  if (difficulty === "easy") return playable[Math.floor(Math.random() * playable.length)];
   if (difficulty === "medium") {
     const nonWild = playable.filter(c => c.color !== "wild");
     const special = nonWild.filter(c => ["skip","reverse","draw2"].includes(c.value));
@@ -70,112 +66,170 @@ function botChooseCard(hand, topCard, activeColor, difficulty) {
   }
   // hard
   const nonWild = playable.filter(c => c.color !== "wild");
-  const actionCards = nonWild.filter(c => ["skip","reverse","draw2"].includes(c.value));
-  const wild4 = playable.filter(c => c.value === "wild4");
-  const wild = playable.filter(c => c.value === "wild");
-  if (actionCards.length > 0) return actionCards[0];
+  const action  = nonWild.filter(c => ["skip","reverse","draw2"].includes(c.value));
+  const wild4   = playable.filter(c => c.value === "wild4");
+  if (action.length > 0) return action[0];
   if (nonWild.length > 0) {
-    const colorCount = {};
-    hand.forEach(c => { if (c.color !== "wild") colorCount[c.color] = (colorCount[c.color]||0)+1; });
-    let best = nonWild[0];
-    nonWild.forEach(c => { if ((colorCount[c.color]||0) > (colorCount[best.color]||0)) best = c; });
-    return best;
+    const cnt = {};
+    hand.forEach(c => { if (c.color !== "wild") cnt[c.color] = (cnt[c.color]||0)+1; });
+    return nonWild.reduce((best, c) => (cnt[c.color]||0) > (cnt[best.color]||0) ? c : best, nonWild[0]);
   }
   if (wild4.length > 0) return wild4[0];
-  return wild[0];
+  return playable[0];
 }
 
 function botChooseColor(hand, difficulty) {
   if (difficulty === "easy") return COLORS[Math.floor(Math.random() * COLORS.length)];
-  const count = {};
-  COLORS.forEach(c => count[c] = 0);
-  hand.forEach(c => { if (c.color !== "wild") count[c.color]++; });
-  return Object.entries(count).sort((a,b) => b[1]-a[1])[0][0];
+  const cnt = {};
+  COLORS.forEach(c => cnt[c] = 0);
+  hand.forEach(c => { if (c.color !== "wild") cnt[c.color]++; });
+  return Object.entries(cnt).sort((a,b) => b[1]-a[1])[0][0];
+}
+
+// ─── Game Engine ──────────────────────────────────────────────────────────────
+function initGame(players) {
+  let deck = shuffle(createDeck());
+  const hands = players.map(() => []);
+  for (let i = 0; i < 7; i++) players.forEach((_, pi) => hands[pi].push(deck.pop()));
+  let top;
+  do { top = deck.pop(); } while (top.color === "wild");
+  return { deck, discard: [top], hands, currentPlayer: 0, direction: 1,
+           activeColor: top.color, status: "playing", lastAction: "",
+           unoCallable: false, unoCallBy: null };
+}
+
+function replenishDeck(s) {
+  if (s.deck.length === 0 && s.discard.length > 1) {
+    const top = s.discard.pop();
+    s.deck = shuffle(s.discard);
+    s.discard = [top];
+  }
+}
+
+function applyCard(state, playerIdx, card, chosenColor) {
+  const s = JSON.parse(JSON.stringify(state));
+  const n = s.hands.length;
+
+  s.hands[playerIdx] = s.hands[playerIdx].filter(c => c.id !== card.id);
+  s.discard.push(card);
+  s.activeColor = chosenColor || card.color;
+  s.unoCallable = false;
+  s.unoCallBy = null;
+
+  if (s.hands[playerIdx].length === 0) {
+    s.status = "ended";
+    s.winner = playerIdx;
+    return s;
+  }
+  if (s.hands[playerIdx].length === 1) {
+    s.unoCallable = true;
+    s.unoCallBy = playerIdx;
+  }
+
+  // step(from, dist) = index of player 'dist' steps away in current direction
+  const step = (from, dist) => ((from + s.direction * dist) % n + n) % n;
+
+  if (card.value === "skip") {
+    // Skip next player: move 2 steps
+    s.currentPlayer = step(playerIdx, 2);
+    s.lastAction = "⊘ Skip !";
+
+  } else if (card.value === "reverse") {
+    s.direction *= -1;
+    if (n === 2) {
+      // 2-player: reverse = play again
+      s.currentPlayer = playerIdx;
+    } else {
+      // Move 1 step in the NEW direction
+      s.currentPlayer = ((playerIdx + s.direction) % n + n) % n;
+    }
+    s.lastAction = "⇄ Sens inversé !";
+
+  } else if (card.value === "draw2") {
+    // Next player draws 2 and is skipped
+    const victim = step(playerIdx, 1);
+    replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
+    replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
+    s.currentPlayer = step(playerIdx, 2);
+    s.lastAction = "+2 !";
+
+  } else if (card.value === "wild4") {
+    // Next player draws 4 and is skipped
+    const victim = step(playerIdx, 1);
+    for (let i = 0; i < 4; i++) { replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop()); }
+    s.currentPlayer = step(playerIdx, 2);
+    s.lastAction = "+4 !";
+
+  } else if (card.value === "wild") {
+    s.currentPlayer = step(playerIdx, 1);
+    s.lastAction = "🎨 Wild !";
+
+  } else {
+    s.currentPlayer = step(playerIdx, 1);
+    s.lastAction = "";
+  }
+
+  return s;
+}
+
+function drawCard(state, playerIdx) {
+  const s = JSON.parse(JSON.stringify(state));
+  const n = s.hands.length;
+  replenishDeck(s);
+  if (s.deck.length) s.hands[playerIdx].push(s.deck.pop());
+  s.currentPlayer = ((playerIdx + s.direction) % n + n) % n;
+  s.lastAction = "Pioche";
+  return s;
 }
 
 // ─── Card Component ───────────────────────────────────────────────────────────
 function UnoCard({ card, onClick, small, hidden, selected, disabled }) {
-  if (hidden) {
-    return (
-      <div
-        style={{
-          width: small ? 36 : 56,
-          height: small ? 54 : 84,
-          borderRadius: 8,
-          background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
-          border: "2px solid #e94560",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-          cursor: disabled ? "default" : "pointer",
-        }}
-      >
-        <span style={{ color: "#e94560", fontWeight: 700, fontSize: small ? 10 : 16, fontFamily: "'Nunito', sans-serif" }}>UNO</span>
-      </div>
-    );
-  }
+  const w = small ? 38 : 62, h = small ? 56 : 92;
 
-  const c = card.color === "wild" ? COLOR_MAP.wild : COLOR_MAP[card.color];
-  const isAction = ["skip","reverse","draw2","wild","wild4"].includes(card.value);
-  const label = {
-    skip: "⊘", reverse: "⇄", draw2: "+2", wild: "🎨", wild4: "+4"
-  }[card.value] || card.value;
+  if (hidden) return (
+    <div style={{
+      width: w, height: h, borderRadius: 9,
+      background: "linear-gradient(135deg,#1a1a2e,#0f3460)",
+      border: "2px solid #e94560", flexShrink: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 2px 8px rgba(0,0,0,.35)",
+    }}>
+      <span style={{ color:"#e94560", fontWeight:800, fontSize:small?9:15, fontFamily:"'Nunito',sans-serif" }}>UNO</span>
+    </div>
+  );
+
+  const c = COLOR_MAP[card.color] || COLOR_MAP.wild;
+  const LABELS = { skip:"⊘", reverse:"⇄", draw2:"+2", wild:"🎨", wild4:"+4" };
+  const label = LABELS[card.value] || card.value;
+  const isAction = !!LABELS[card.value];
 
   return (
-    <div
-      onClick={() => !disabled && onClick && onClick(card)}
-      style={{
-        width: small ? 36 : 60,
-        height: small ? 54 : 90,
-        borderRadius: 10,
-        background: c.bg,
-        border: selected ? "3px solid #fff" : `2px solid ${c.border}`,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        cursor: disabled ? "default" : (onClick ? "pointer" : "default"),
-        flexShrink: 0,
-        transform: selected ? "translateY(-12px)" : "none",
-        transition: "transform 0.15s ease, box-shadow 0.15s ease",
-        boxShadow: selected ? "0 8px 24px rgba(0,0,0,0.4)" : "0 2px 8px rgba(0,0,0,0.2)",
-        position: "relative",
-        userSelect: "none",
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
-      {card.color !== "wild" && (
-        <>
-          <span style={{ position: "absolute", top: 3, left: 5, fontSize: small ? 8 : 11, color: c.text, fontWeight: 700, opacity: 0.9 }}>{label}</span>
-          <span style={{ position: "absolute", bottom: 3, right: 5, fontSize: small ? 8 : 11, color: c.text, fontWeight: 700, opacity: 0.9, transform: "rotate(180deg)" }}>{label}</span>
-        </>
-      )}
+    <div onClick={() => !disabled && onClick && onClick(card)} style={{
+      width: w, height: h, borderRadius: 10,
+      background: c.bg, border: selected ? "3px solid #fff" : `2px solid ${c.border}`,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      cursor: disabled ? "default" : onClick ? "pointer" : "default",
+      flexShrink: 0, position: "relative", userSelect: "none",
+      transform: selected ? "translateY(-14px)" : "none",
+      transition: "transform .15s, box-shadow .15s",
+      boxShadow: selected ? "0 10px 28px rgba(0,0,0,.5)" : "0 2px 8px rgba(0,0,0,.25)",
+      opacity: disabled ? 0.45 : 1,
+    }}>
+      {card.color !== "wild" && <>
+        <span style={{ position:"absolute", top:3, left:5, fontSize:small?8:11, color:c.text, fontWeight:700 }}>{label}</span>
+        <span style={{ position:"absolute", bottom:3, right:5, fontSize:small?8:11, color:c.text, fontWeight:700, transform:"rotate(180deg)" }}>{label}</span>
+      </>}
       <div style={{
-        background: "rgba(255,255,255,0.15)",
-        borderRadius: 8,
-        width: small ? 22 : 36,
-        height: small ? 32 : 54,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "1.5px solid rgba(255,255,255,0.25)",
+        background:"rgba(255,255,255,.15)", borderRadius:7,
+        width:small?24:38, height:small?34:56,
+        display:"flex", alignItems:"center", justifyContent:"center",
+        border:"1.5px solid rgba(255,255,255,.22)",
       }}>
-        <span style={{
-          fontSize: small ? (isAction ? 10 : 12) : (isAction ? 16 : 22),
-          fontWeight: 800,
-          color: c.text,
-          fontFamily: "'Nunito', sans-serif",
-          lineHeight: 1,
-          textAlign: "center",
-        }}>{label}</span>
+        <span style={{ fontSize:small?(isAction?10:13):(isAction?18:24), fontWeight:800, color:c.text, fontFamily:"'Nunito',sans-serif", lineHeight:1 }}>{label}</span>
       </div>
       {card.color === "wild" && (
-        <div style={{ display: "flex", gap: 2, marginTop: 2 }}>
-          {COLORS.map(col => (
-            <div key={col} style={{ width: 5, height: 5, borderRadius: "50%", background: COLOR_MAP[col].bg }} />
-          ))}
+        <div style={{ display:"flex", gap:2, marginTop:3 }}>
+          {COLORS.map(col => <div key={col} style={{ width:5, height:5, borderRadius:"50%", background:COLOR_MAP[col].bg }} />)}
         </div>
       )}
     </div>
@@ -185,27 +239,17 @@ function UnoCard({ card, onClick, small, hidden, selected, disabled }) {
 // ─── Color Picker ─────────────────────────────────────────────────────────────
 function ColorPicker({ onPick }) {
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex",
-      alignItems: "center", justifyContent: "center", zIndex: 100,
-    }}>
-      <div style={{
-        background: "#fff", borderRadius: 20, padding: "32px 40px", textAlign: "center",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
-      }}>
-        <p style={{ margin: "0 0 20px", fontWeight: 700, fontSize: 18, color: "#222", fontFamily: "'Nunito', sans-serif" }}>
-          Choisir une couleur
-        </p>
-        <div style={{ display: "flex", gap: 16 }}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ background:"#1a1a2e", borderRadius:20, padding:"32px 40px", textAlign:"center", border:"1px solid #333" }}>
+        <p style={{ margin:"0 0 20px", fontWeight:700, fontSize:18, color:"#fff", fontFamily:"'Nunito',sans-serif" }}>Choisir une couleur</p>
+        <div style={{ display:"flex", gap:16 }}>
           {COLORS.map(col => (
             <button key={col} onClick={() => onPick(col)} style={{
-              width: 60, height: 60, borderRadius: 12, background: COLOR_MAP[col].bg,
-              border: `3px solid ${COLOR_MAP[col].border}`, cursor: "pointer",
-              transition: "transform 0.15s",
-              fontFamily: "'Nunito', sans-serif",
+              width:60, height:60, borderRadius:12, background:COLOR_MAP[col].bg,
+              border:`3px solid ${COLOR_MAP[col].border}`, cursor:"pointer", transition:"transform .15s",
             }}
-              onMouseEnter={e => e.target.style.transform = "scale(1.1)"}
-              onMouseLeave={e => e.target.style.transform = "scale(1)"}
+              onMouseEnter={e => e.currentTarget.style.transform="scale(1.12)"}
+              onMouseLeave={e => e.currentTarget.style.transform="scale(1)"}
             />
           ))}
         </div>
@@ -214,754 +258,488 @@ function ColorPicker({ onPick }) {
   );
 }
 
-// ─── Game Engine ──────────────────────────────────────────────────────────────
-function initGame(players) {
-  let deck = shuffle(createDeck());
-  const hands = players.map(() => []);
-  for (let i = 0; i < 7; i++) {
-    players.forEach((_, pi) => hands[pi].push(deck.pop()));
-  }
-  let top;
-  do { top = deck.pop(); } while (top.color === "wild");
-  return {
-    deck,
-    discard: [top],
-    hands,
-    currentPlayer: 0,
-    direction: 1,
-    activeColor: top.color,
-    drawPending: 0,
-    status: "playing",
-    lastAction: "",
-    scores: players.map(() => 0),
-    unoCallable: false,
-    unoCallBy: null,
-  };
-}
-
-function nextPlayer(current, direction, count) {
-  return (current + direction * count + 100) % count;
-}
-
-function applyCard(state, playerIdx, card, chosenColor) {
-  const newState = JSON.parse(JSON.stringify(state));
-  const n = newState.hands.length;
-
-  newState.hands[playerIdx] = newState.hands[playerIdx].filter(c => c.id !== card.id);
-  newState.discard.push(card);
-  newState.activeColor = chosenColor || card.color;
-  newState.unoCallable = false;
-  newState.unoCallBy = null;
-
-  if (newState.hands[playerIdx].length === 0) {
-    newState.status = "ended";
-    newState.winner = playerIdx;
-    newState.scores = newState.hands.map(h => calcScore(h));
-    return newState;
-  }
-  if (newState.hands[playerIdx].length === 1) {
-    newState.unoCallable = true;
-    newState.unoCallBy = playerIdx;
-  }
-
-  let skip = false;
-  if (card.value === "skip") {
-    skip = true;
-    newState.lastAction = "Skip !";
-  } else if (card.value === "reverse") {
-    newState.direction *= -1;
-    if (n === 2) skip = true;
-    newState.lastAction = "Sens inversé !";
-  } else if (card.value === "draw2") {
-    const next = nextPlayer(playerIdx, newState.direction, n);
-    for (let i = 0; i < 2; i++) {
-      if (newState.deck.length === 0) newState.deck = shuffle(newState.discard.splice(0, newState.discard.length - 1));
-      newState.hands[next].push(newState.deck.pop());
-    }
-    skip = true;
-    newState.lastAction = "+2 !";
-  } else if (card.value === "wild4") {
-    const next = nextPlayer(playerIdx, newState.direction, n);
-    for (let i = 0; i < 4; i++) {
-      if (newState.deck.length === 0) newState.deck = shuffle(newState.discard.splice(0, newState.discard.length - 1));
-      newState.hands[next].push(newState.deck.pop());
-    }
-    skip = true;
-    newState.lastAction = "+4 !";
-  } else if (card.value === "wild") {
-    newState.lastAction = "Wild !";
-  } else {
-    newState.lastAction = "";
-  }
-
-  const steps = skip ? 2 : 1;
-  newState.currentPlayer = nextPlayer(playerIdx, newState.direction, n);
-  if (skip) newState.currentPlayer = nextPlayer(playerIdx, newState.direction * steps, n);
-
-  return newState;
-}
-
-function drawCard(state, playerIdx) {
-  const newState = JSON.parse(JSON.stringify(state));
-  if (newState.deck.length === 0) {
-    newState.deck = shuffle(newState.discard.splice(0, newState.discard.length - 1));
-  }
-  if (newState.deck.length === 0) return newState;
-  const drawn = newState.deck.pop();
-  newState.hands[playerIdx].push(drawn);
-  newState.currentPlayer = nextPlayer(playerIdx, newState.direction, newState.hands.length);
-  newState.lastAction = "Pioche !";
-  return newState;
-}
-
-// ─── Main Game Screen ─────────────────────────────────────────────────────────
+// ─── Game Screen ──────────────────────────────────────────────────────────────
 function GameScreen({ players, onBack }) {
-  const [gs, setGs] = useState(() => initGame(players));
-  const [selectedCard, setSelectedCard] = useState(null);
-  const [showColorPicker, setShowColorPicker] = useState(false);
-  const [pendingCard, setPendingCard] = useState(null);
-  const [log, setLog] = useState([]);
-  const [showUnoBtn, setShowUnoBtn] = useState(false);
-  const botTimerRef = useRef(null);
+  const [gs,          setGs]         = useState(() => initGame(players));
+  const [selected,    setSelected]   = useState(null);
+  const [showPicker,  setShowPicker] = useState(false);
+  const [pendingCard, setPending]    = useState(null);
+  const [log,         setLog]        = useState([]);
+  const [showUno,     setShowUno]    = useState(false);
+  const botTimer = useRef(null);
 
   const humanIdx = players.findIndex(p => p.type === "human");
-  const topCard = gs.discard[gs.discard.length - 1];
-
-  const addLog = (msg) => setLog(l => [msg, ...l].slice(0, 8));
-
+  const topCard  = gs.discard[gs.discard.length - 1];
   const isMyTurn = gs.status === "playing" && gs.currentPlayer === humanIdx;
 
-  // Bot logic
+  const addLog = msg => setLog(l => [msg, ...l].slice(0, 10));
+
+  // Bot turns
   useEffect(() => {
     if (gs.status !== "playing") return;
-    const current = gs.currentPlayer;
-    if (players[current].type === "human") return;
-    if (botTimerRef.current) clearTimeout(botTimerRef.current);
-    const delay = players[current].difficulty === "hard" ? 900 : players[current].difficulty === "medium" ? 1200 : 1600;
-    botTimerRef.current = setTimeout(() => {
+    const cur = gs.currentPlayer;
+    if (players[cur].type === "human") return;
+    clearTimeout(botTimer.current);
+    const delay = { easy:1800, medium:1300, hard:900 }[players[cur].difficulty] || 1300;
+    botTimer.current = setTimeout(() => {
       setGs(prev => {
-        if (prev.status !== "playing" || prev.currentPlayer !== current) return prev;
-        const card = botChooseCard(prev.hands[current], prev.discard[prev.discard.length - 1], prev.activeColor, players[current].difficulty);
+        if (prev.status !== "playing" || prev.currentPlayer !== cur) return prev;
+        const top  = prev.discard[prev.discard.length - 1];
+        const card = botChooseCard(prev.hands[cur], top, prev.activeColor, players[cur].difficulty);
         if (!card) {
-          const ns = drawCard(prev, current);
-          addLog(`${players[current].name} pioche`);
-          return ns;
+          addLog(`${players[cur].name} pioche`);
+          return drawCard(prev, cur);
         }
-        if (card.color === "wild") {
-          const col = botChooseColor(prev.hands[current], players[current].difficulty);
-          const ns = applyCard(prev, current, card, col);
-          addLog(`${players[current].name} joue ${card.value} → ${col}`);
-          return ns;
-        }
-        const ns = applyCard(prev, current, card, null);
-        addLog(`${players[current].name} joue ${card.value}`);
-        return ns;
+        const col = card.color === "wild" ? botChooseColor(prev.hands[cur], players[cur].difficulty) : null;
+        addLog(`${players[cur].name} joue ${card.value}${col?" → "+col:""}`);
+        return applyCard(prev, cur, card, col);
       });
     }, delay);
-    return () => clearTimeout(botTimerRef.current);
+    return () => clearTimeout(botTimer.current);
   }, [gs.currentPlayer, gs.status]);
 
-  // UNO button timer
+  // UNO button
   useEffect(() => {
     if (gs.unoCallable && gs.unoCallBy === humanIdx) {
-      setShowUnoBtn(true);
-      const t = setTimeout(() => setShowUnoBtn(false), 4000);
+      setShowUno(true);
+      const t = setTimeout(() => setShowUno(false), 4000);
       return () => clearTimeout(t);
-    } else {
-      setShowUnoBtn(false);
     }
+    setShowUno(false);
   }, [gs.unoCallable, gs.unoCallBy]);
 
-  const handleCardClick = (card) => {
-    if (!isMyTurn) return;
-    if (!canPlay(card, topCard, gs.activeColor)) return;
-    if (selectedCard?.id === card.id) {
-      // Play it
-      if (card.color === "wild") {
-        setPendingCard(card);
-        setShowColorPicker(true);
-        setSelectedCard(null);
-      } else {
-        const ns = applyCard(gs, humanIdx, card, null);
-        setGs(ns);
-        setSelectedCard(null);
-        addLog(`Vous jouez ${card.value}`);
-      }
-    } else {
-      setSelectedCard(card);
-    }
+  const handleCardClick = card => {
+    if (!isMyTurn || !canPlay(card, topCard, gs.activeColor)) return;
+    if (selected?.id === card.id) {
+      if (card.color === "wild") { setPending(card); setShowPicker(true); setSelected(null); }
+      else { addLog(`Vous jouez ${card.value}`); setGs(applyCard(gs, humanIdx, card, null)); setSelected(null); }
+    } else { setSelected(card); }
   };
 
   const handleDraw = () => {
     if (!isMyTurn) return;
-    const ns = drawCard(gs, humanIdx);
-    setGs(ns);
     addLog("Vous piochez");
+    setGs(drawCard(gs, humanIdx));
   };
 
-  const handleColorPick = (col) => {
-    setShowColorPicker(false);
-    const ns = applyCard(gs, humanIdx, pendingCard, col);
-    setGs(ns);
-    setPendingCard(null);
+  const handleColorPick = col => {
+    setShowPicker(false);
     addLog(`Vous jouez ${pendingCard.value} → ${col}`);
+    setGs(applyCard(gs, humanIdx, pendingCard, col));
+    setPending(null);
   };
 
-  const handleUno = () => {
-    setShowUnoBtn(false);
-    addLog("UNO !");
-  };
-
-  const restart = () => {
-    setGs(initGame(players));
-    setLog([]);
-    setSelectedCard(null);
-  };
-
-  const topColor = COLOR_MAP[gs.activeColor] || COLOR_MAP.wild;
-
-  // Layout
-  const botPlayers = players.filter((p, i) => i !== humanIdx);
-  const botTop = botPlayers.filter((_, bi) => bi < Math.ceil(botPlayers.length / 2));
-  const botSide = botPlayers.filter((_, bi) => bi >= Math.ceil(botPlayers.length / 2));
-
-  const getPlayerIndex = (name) => players.findIndex(p => p.name === name);
+  const restart = () => { setGs(initGame(players)); setLog([]); setSelected(null); };
 
   if (gs.status === "ended") {
     const winner = players[gs.winner];
     return (
-      <div style={{ minHeight: "100vh", background: "#0f0f1a", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Nunito', sans-serif" }}>
-        <div style={{ textAlign: "center", color: "#fff" }}>
-          <div style={{ fontSize: 72, marginBottom: 16 }}>{winner.type === "human" ? "🎉" : "😢"}</div>
-          <h1 style={{ fontSize: 42, fontWeight: 800, margin: "0 0 8px", color: winner.type === "human" ? "#F5C518" : "#E8453C" }}>
-            {winner.type === "human" ? "Victoire !" : `${winner.name} gagne !`}
+      <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Nunito',sans-serif" }}>
+        <div style={{ textAlign:"center", color:"#fff" }}>
+          <div style={{ fontSize:72, marginBottom:16 }}>{winner.type==="human"?"🎉":"😢"}</div>
+          <h1 style={{ fontSize:42, fontWeight:800, margin:"0 0 8px", color:winner.type==="human"?"#F5C518":"#E8453C" }}>
+            {winner.type==="human" ? "Victoire !" : `${winner.name} gagne !`}
           </h1>
-          <p style={{ fontSize: 18, color: "#aaa", margin: "0 0 32px" }}>
-            {winner.type === "human" ? "Bravo, vous avez tout raflé !" : "Meilleure chance la prochaine fois !"}
+          <p style={{ fontSize:18, color:"#666", margin:"0 0 36px" }}>
+            {winner.type==="human" ? "Bien joué !" : "Meilleure chance la prochaine fois…"}
           </p>
-          <div style={{ display: "flex", gap: 16, justifyContent: "center" }}>
-            <button onClick={restart} style={{ padding: "14px 32px", background: "#F5C518", color: "#222", border: "none", borderRadius: 12, fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>
-              Rejouer
-            </button>
-            <button onClick={onBack} style={{ padding: "14px 32px", background: "transparent", color: "#fff", border: "2px solid #444", borderRadius: 12, fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>
-              Menu
-            </button>
+          <div style={{ display:"flex", gap:16, justifyContent:"center" }}>
+            <button onClick={restart} style={BS("primary")}>Rejouer</button>
+            <button onClick={onBack}  style={BS("outline")}>Menu</button>
           </div>
         </div>
       </div>
     );
   }
 
+  const topColor     = COLOR_MAP[gs.activeColor] || COLOR_MAP.wild;
+  const opponents    = players.map((p,i) => ({...p, idx:i})).filter(p => p.idx !== humanIdx);
+  const botsTop      = opponents.slice(0, Math.ceil(opponents.length / 2));
+  const botsSide     = opponents.slice(Math.ceil(opponents.length / 2));
+
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#0f0f1a",
-      display: "flex",
-      flexDirection: "column",
-      fontFamily: "'Nunito', sans-serif",
-      overflow: "hidden",
-      position: "relative",
-    }}>
-      {showColorPicker && <ColorPicker onPick={handleColorPick} />}
+    <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", flexDirection:"column", fontFamily:"'Nunito',sans-serif" }}>
+      {showPicker && <ColorPicker onPick={handleColorPick} />}
 
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 24px", borderBottom: "1px solid #222" }}>
-        <button onClick={onBack} style={{ background: "transparent", border: "1px solid #333", color: "#888", padding: "6px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "'Nunito', sans-serif" }}>
-          ← Menu
-        </button>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ width: 12, height: 12, borderRadius: "50%", background: topColor.bg }} />
-          <span style={{ color: "#ccc", fontSize: 13 }}>
-            {gs.lastAction || (isMyTurn ? "Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}
+      {/* Top bar */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 20px", borderBottom:"1px solid #1e1e2e" }}>
+        <button onClick={onBack}  style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>← Menu</button>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <div style={{ width:10, height:10, borderRadius:"50%", background:topColor.bg }} />
+          <span style={{ color:"#888", fontSize:13 }}>
+            {gs.lastAction || (isMyTurn ? "▶ Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}
           </span>
+          <span style={{ color:"#333", fontSize:13 }}>{gs.direction===1?"↻":"↺"}</span>
         </div>
-        <button onClick={restart} style={{ background: "transparent", border: "1px solid #333", color: "#888", padding: "6px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "'Nunito', sans-serif" }}>
-          Reset
-        </button>
+        <button onClick={restart} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>Reset</button>
       </div>
 
-      {/* Bot opponents top */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 32, padding: "16px 0 8px" }}>
-        {botTop.map((p) => {
-          const pi = getPlayerIndex(p.name);
-          return (
-            <div key={p.name} style={{ textAlign: "center" }}>
-              <div style={{
-                fontSize: 12, color: pi === gs.currentPlayer ? "#F5C518" : "#666",
-                fontWeight: pi === gs.currentPlayer ? 700 : 400, marginBottom: 6,
-              }}>
-                {p.name} {pi === gs.currentPlayer ? "●" : ""} ({gs.hands[pi]?.length} cartes)
-              </div>
-              <div style={{ display: "flex", gap: -8, justifyContent: "center" }}>
-                {(gs.hands[pi] || []).slice(0, 12).map((c, ci) => (
-                  <div key={ci} style={{ marginLeft: ci > 0 ? -14 : 0 }}>
-                    <UnoCard card={c} small hidden />
-                  </div>
-                ))}
-                {(gs.hands[pi]?.length || 0) > 12 && (
-                  <div style={{ color: "#666", fontSize: 11, alignSelf: "center", marginLeft: 4 }}>+{gs.hands[pi].length - 12}</div>
-                )}
-              </div>
+      {/* Opponents top */}
+      <div style={{ display:"flex", justifyContent:"center", gap:40, padding:"14px 0 6px" }}>
+        {botsTop.map(p => (
+          <div key={p.idx} style={{ textAlign:"center" }}>
+            <div style={{ fontSize:12, color:p.idx===gs.currentPlayer?"#F5C518":"#555", fontWeight:p.idx===gs.currentPlayer?700:400, marginBottom:6 }}>
+              {p.name} {p.idx===gs.currentPlayer?"●":""} ({gs.hands[p.idx]?.length})
             </div>
-          );
-        })}
+            <div style={{ display:"flex", justifyContent:"center" }}>
+              {(gs.hands[p.idx]||[]).slice(0,12).map((c,ci) => (
+                <div key={ci} style={{ marginLeft:ci>0?-16:0 }}><UnoCard card={c} small hidden /></div>
+              ))}
+              {(gs.hands[p.idx]?.length||0)>12 && <span style={{ color:"#555", fontSize:11, alignSelf:"center", marginLeft:4 }}>+{gs.hands[p.idx].length-12}</span>}
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* Center area */}
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 48 }}>
-        {/* Side bots */}
-        {botSide.map((p) => {
-          const pi = getPlayerIndex(p.name);
-          return (
-            <div key={p.name} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              <div style={{ fontSize: 12, color: pi === gs.currentPlayer ? "#F5C518" : "#666", fontWeight: pi === gs.currentPlayer ? 700 : 400 }}>
-                {p.name} {pi === gs.currentPlayer ? "●" : ""}
-              </div>
-              <div style={{ fontSize: 11, color: "#555" }}>{gs.hands[pi]?.length} cartes</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: -10 }}>
-                {(gs.hands[pi] || []).slice(0, 8).map((c, ci) => (
-                  <div key={ci} style={{ marginTop: ci > 0 ? -28 : 0 }}>
-                    <UnoCard card={c} small hidden />
-                  </div>
-                ))}
-              </div>
+      {/* Center */}
+      <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:48 }}>
+        {botsSide.map(p => (
+          <div key={p.idx} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+            <div style={{ fontSize:12, color:p.idx===gs.currentPlayer?"#F5C518":"#555", fontWeight:p.idx===gs.currentPlayer?700:400 }}>
+              {p.name} {p.idx===gs.currentPlayer?"●":""}
             </div>
-          );
-        })}
-
-        {/* Deck & Discard */}
-        <div style={{ display: "flex", gap: 32, alignItems: "center" }}>
-          {/* Draw deck */}
-          <div style={{ textAlign: "center" }}>
-            <div onClick={isMyTurn ? handleDraw : undefined} style={{ cursor: isMyTurn ? "pointer" : "default" }}>
-              <UnoCard card={{ color: "wild", value: "wild" }} hidden disabled={!isMyTurn} />
-            </div>
-            <div style={{ color: "#555", fontSize: 11, marginTop: 4 }}>{gs.deck.length} cartes</div>
-          </div>
-
-          {/* Direction indicator */}
-          <div style={{ color: "#444", fontSize: 24 }}>
-            {gs.direction === 1 ? "↻" : "↺"}
-          </div>
-
-          {/* Top card */}
-          <div style={{ textAlign: "center" }}>
-            <div style={{
-              padding: 4,
-              borderRadius: 14,
-              background: `${topColor.bg}33`,
-              border: `2px solid ${topColor.bg}66`,
-            }}>
-              <UnoCard card={topCard} />
-            </div>
-            <div style={{ color: topColor.bg, fontSize: 11, marginTop: 4, fontWeight: 700 }}>
-              {gs.activeColor.toUpperCase()}
+            <div style={{ fontSize:11, color:"#444" }}>{gs.hands[p.idx]?.length} cartes</div>
+            <div style={{ display:"flex", flexDirection:"column" }}>
+              {(gs.hands[p.idx]||[]).slice(0,8).map((c,ci) => (
+                <div key={ci} style={{ marginTop:ci>0?-30:0 }}><UnoCard card={c} small hidden /></div>
+              ))}
             </div>
           </div>
+        ))}
+
+        {/* Draw pile */}
+        <div style={{ textAlign:"center" }}>
+          <div onClick={isMyTurn?handleDraw:undefined} style={{ cursor:isMyTurn?"pointer":"default" }}>
+            <UnoCard card={{color:"wild",value:"wild"}} hidden disabled={!isMyTurn} />
+          </div>
+          <div style={{ color:"#444", fontSize:11, marginTop:4 }}>{gs.deck.length} cartes</div>
+        </div>
+
+        {/* Discard */}
+        <div style={{ textAlign:"center" }}>
+          <div style={{ padding:4, borderRadius:14, background:`${topColor.bg}22`, border:`2px solid ${topColor.bg}55` }}>
+            <UnoCard card={topCard} />
+          </div>
+          <div style={{ color:topColor.bg, fontSize:11, marginTop:4, fontWeight:700 }}>{gs.activeColor.toUpperCase()}</div>
         </div>
       </div>
+
+      {/* Log */}
+      {log.length > 0 && (
+        <div style={{ padding:"4px 20px", display:"flex", gap:8, overflowX:"auto" }}>
+          {log.slice(0,5).map((l,i) => (
+            <span key={i} style={{ fontSize:11, color:"#333", whiteSpace:"nowrap", opacity:1-i*0.18 }}>{l}</span>
+          ))}
+        </div>
+      )}
 
       {/* Player hand */}
-      <div style={{
-        background: "#111",
-        borderTop: "1px solid #222",
-        padding: "16px 24px 20px",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <span style={{ color: isMyTurn ? "#F5C518" : "#555", fontSize: 14, fontWeight: isMyTurn ? 700 : 400 }}>
-            {isMyTurn ? "▶ Votre tour" : "Vous"} — {gs.hands[humanIdx]?.length} cartes
+      <div style={{ background:"#0c0c18", borderTop:"1px solid #1e1e2e", padding:"14px 20px 20px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+          <span style={{ color:isMyTurn?"#F5C518":"#444", fontSize:14, fontWeight:isMyTurn?700:400 }}>
+            {isMyTurn?"▶ Votre tour":"Vos cartes"} — {gs.hands[humanIdx]?.length}
           </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            {showUnoBtn && (
-              <button onClick={handleUno} style={{
-                background: "#E8453C", color: "#fff", border: "none",
-                padding: "8px 20px", borderRadius: 10, fontWeight: 800, fontSize: 16,
-                cursor: "pointer", fontFamily: "'Nunito', sans-serif", animation: "pulse 0.5s infinite",
-              }}>
-                UNO!
-              </button>
-            )}
-          </div>
+          {showUno && (
+            <button onClick={() => setShowUno(false)} style={{
+              background:"#E8453C", color:"#fff", border:"none",
+              padding:"8px 22px", borderRadius:10, fontWeight:800, fontSize:17,
+              cursor:"pointer", fontFamily:"'Nunito',sans-serif",
+            }}>UNO !</button>
+          )}
         </div>
-        <div style={{
-          display: "flex",
-          gap: 6,
-          overflowX: "auto",
-          paddingBottom: 8,
-          flexWrap: "nowrap",
-        }}>
-          {(gs.hands[humanIdx] || []).map(card => {
+        <div style={{ display:"flex", gap:7, overflowX:"auto", paddingBottom:6 }}>
+          {(gs.hands[humanIdx]||[]).map(card => {
             const playable = isMyTurn && canPlay(card, topCard, gs.activeColor);
             return (
-              <div key={card.id} style={{ flexShrink: 0 }}>
-                <UnoCard
-                  card={card}
-                  onClick={playable ? handleCardClick : undefined}
-                  selected={selectedCard?.id === card.id}
-                  disabled={!playable}
-                />
+              <div key={card.id} style={{ flexShrink:0 }}>
+                <UnoCard card={card} onClick={playable?handleCardClick:undefined} selected={selected?.id===card.id} disabled={!playable} />
               </div>
             );
           })}
         </div>
-        {selectedCard && (
-          <div style={{ textAlign: "center", marginTop: 8, color: "#888", fontSize: 12 }}>
-            Cliquez à nouveau pour jouer la carte sélectionnée
-          </div>
-        )}
+        {selected && <div style={{ textAlign:"center", marginTop:6, color:"#555", fontSize:12 }}>Cliquez à nouveau pour jouer</div>}
       </div>
-
-      <style>{`@keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }`}</style>
     </div>
   );
 }
 
-// ─── Multiplayer Room System (local simulation) ───────────────────────────────
-const roomsStore = {};
+// ─── localStorage Room helpers ────────────────────────────────────────────────
+const LS       = "uno_rooms_v2";
+const getRooms = ()        => { try { return JSON.parse(localStorage.getItem(LS)||"{}"); } catch { return {}; } };
+const getRoom  = code      => getRooms()[code] || null;
+const putRoom  = (code, r) => { const all = getRooms(); all[code] = r; localStorage.setItem(LS, JSON.stringify(all)); };
+const delRoom  = code      => { const all = getRooms(); delete all[code]; localStorage.setItem(LS, JSON.stringify(all)); };
 
+// ─── Multiplayer Lobby ────────────────────────────────────────────────────────
 function MultiplayerLobby({ onStartGame, onBack }) {
-  const [view, setView] = useState("menu"); // menu | create | join
-  const [roomCode, setRoomCode] = useState("");
+  const [view,       setView]       = useState("menu");
+  const [roomCode,   setRoomCode]   = useState("");
   const [playerName, setPlayerName] = useState("");
-  const [rooms, setRooms] = useState(roomsStore);
-  const [myRoom, setMyRoom] = useState(null);
-  const [error, setError] = useState("");
+  const [myRoom,     setMyRoom]     = useState(null);
+  const [roomData,   setRoomData]   = useState(null);
+  const [error,      setError]      = useState("");
+  const pollRef = useRef(null);
 
-  const refreshRooms = () => setRooms({ ...roomsStore });
+  // Poll localStorage every second so lobby updates live across tabs
+  useEffect(() => {
+    if (!myRoom) return;
+    const poll = () => { const r = getRoom(myRoom); if (r) setRoomData({...r}); };
+    poll();
+    pollRef.current = setInterval(poll, 1000);
+    return () => clearInterval(pollRef.current);
+  }, [myRoom]);
 
   const createRoom = () => {
     if (!playerName.trim()) { setError("Entrez votre nom"); return; }
-    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
-    roomsStore[code] = {
-      code,
-      host: playerName.trim(),
-      players: [{ name: playerName.trim(), type: "human" }],
-      status: "waiting",
-    };
-    setMyRoom(code);
-    setView("room");
-    setError("");
+    const code = Math.random().toString(36).substring(2,7).toUpperCase();
+    const room = { code, host: playerName.trim(), players:[{name:playerName.trim(),type:"human"}], status:"waiting" };
+    putRoom(code, room);
+    setMyRoom(code); setRoomData(room); setView("room"); setError("");
   };
 
   const joinRoom = () => {
     if (!playerName.trim()) { setError("Entrez votre nom"); return; }
-    const r = roomsStore[roomCode.toUpperCase()];
-    if (!r) { setError("Salle introuvable"); return; }
-    if (r.players.length >= 4) { setError("Salle pleine"); return; }
-    if (r.status !== "waiting") { setError("Partie en cours"); return; }
-    r.players.push({ name: playerName.trim(), type: "human" });
-    setMyRoom(roomCode.toUpperCase());
-    setView("room");
-    setError("");
+    const code = roomCode.trim().toUpperCase();
+    if (!code) { setError("Entrez un code"); return; }
+    const r = getRoom(code);
+    if (!r)                    { setError("Salle introuvable — vérifiez le code"); return; }
+    if (r.players.length >= 4) { setError("Salle pleine (4/4)"); return; }
+    if (r.status !== "waiting"){ setError("Partie déjà lancée"); return; }
+    if (r.players.find(p => p.name === playerName.trim())) { setError("Ce nom est déjà pris dans cette salle"); return; }
+    r.players.push({name:playerName.trim(),type:"human"});
+    putRoom(code, r);
+    setMyRoom(code); setRoomData(r); setView("room"); setError("");
   };
 
   const startGame = () => {
-    const r = roomsStore[myRoom];
-    if (r.players.length < 2) { setError("Au moins 2 joueurs requis"); return; }
+    const r = getRoom(myRoom);
+    if (!r) { setError("Salle introuvable"); return; }
+    if (r.players.length < 2) { setError("Il faut au moins 2 joueurs"); return; }
+    clearInterval(pollRef.current);
+    delRoom(myRoom);
     onStartGame(r.players);
   };
 
   const leaveRoom = () => {
-    if (myRoom && roomsStore[myRoom]) {
-      delete roomsStore[myRoom];
+    clearInterval(pollRef.current);
+    if (myRoom) {
+      const r = getRoom(myRoom);
+      if (r) {
+        if (r.host === playerName.trim()) delRoom(myRoom);
+        else { r.players = r.players.filter(p => p.name !== playerName.trim()); putRoom(myRoom, r); }
+      }
     }
-    setMyRoom(null);
-    setView("menu");
-    setError("");
+    setMyRoom(null); setRoomData(null); setView("menu"); setError("");
   };
 
-  const room = myRoom ? roomsStore[myRoom] : null;
+  const room = roomData;
 
-  if (view === "room" && room) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Code de la salle</div>
-          <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: 8, color: "#F5C518" }}>{room.code}</div>
-          <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>Partagez ce code avec vos amis</div>
+  if (view === "room" && room) return (
+    <div style={{ display:"flex", flexDirection:"column", gap:24 }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:13, color:"#666", marginBottom:4 }}>Code de la salle</div>
+        <div style={{ fontSize:38, fontWeight:800, letterSpacing:10, color:"#F5C518" }}>{room.code}</div>
+        <div style={{ fontSize:12, color:"#555", marginTop:6, lineHeight:1.6 }}>
+          Partagez ce code avec vos amis.<br/>Chacun ouvre le site dans un onglet et entre ce code.
         </div>
-        <div>
-          <div style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>Joueurs ({room.players.length}/4)</div>
-          {room.players.map((p, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: "#1a1a2e", borderRadius: 10, marginBottom: 8 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#27AE60" }} />
-              <span style={{ color: "#fff", fontWeight: 600 }}>{p.name}</span>
-              {i === 0 && <span style={{ marginLeft: "auto", fontSize: 11, color: "#F5C518" }}>Hôte</span>}
-            </div>
-          ))}
-        </div>
-        {error && <div style={{ color: "#E8453C", fontSize: 13 }}>{error}</div>}
-        <div style={{ display: "flex", gap: 12 }}>
-          <button onClick={leaveRoom} style={btnStyle("outline")}>Quitter</button>
-          {room.host === playerName && (
-            <button onClick={startGame} disabled={room.players.length < 2} style={btnStyle("primary", room.players.length < 2)}>
-              Lancer la partie
-            </button>
-          )}
-        </div>
-        {room.host !== playerName && (
-          <div style={{ textAlign: "center", color: "#555", fontSize: 13 }}>En attente de l'hôte…</div>
+      </div>
+      <div>
+        <div style={{ fontSize:13, color:"#666", marginBottom:10 }}>Joueurs ({room.players.length}/4)</div>
+        {room.players.map((p,i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 16px", background:"#1a1a2e", borderRadius:10, marginBottom:8 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:"#27AE60" }} />
+            <span style={{ color:"#fff", fontWeight:600 }}>{p.name}</span>
+            {i===0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#F5C518" }}>Hôte</span>}
+          </div>
+        ))}
+      </div>
+      {error && <div style={{ color:"#E8453C", fontSize:13 }}>{error}</div>}
+      <div style={{ display:"flex", gap:12 }}>
+        <button onClick={leaveRoom} style={BS("outline")}>Quitter</button>
+        {room.host === playerName.trim() && (
+          <button onClick={startGame} disabled={room.players.length < 2} style={BS("primary", room.players.length < 2)}>
+            Lancer la partie
+          </button>
         )}
       </div>
-    );
-  }
+      {room.host !== playerName.trim() && (
+        <div style={{ textAlign:"center", color:"#555", fontSize:13 }}>En attente de l'hôte…</div>
+      )}
+    </div>
+  );
 
   if (view === "create") return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h3 style={{ margin: 0, color: "#fff", fontSize: 20, fontWeight: 700 }}>Créer une salle</h3>
-      <input placeholder="Votre nom" value={playerName} onChange={e => setPlayerName(e.target.value)} style={inputStyle} />
-      {error && <div style={{ color: "#E8453C", fontSize: 13 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 12 }}>
-        <button onClick={() => setView("menu")} style={btnStyle("outline")}>Retour</button>
-        <button onClick={createRoom} style={btnStyle("primary")}>Créer</button>
+    <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+      <h3 style={{ margin:0, color:"#fff", fontSize:20, fontWeight:700 }}>Créer une salle</h3>
+      <input placeholder="Votre nom" value={playerName} onChange={e => setPlayerName(e.target.value)} style={IS} />
+      {error && <div style={{ color:"#E8453C", fontSize:13 }}>{error}</div>}
+      <div style={{ display:"flex", gap:12 }}>
+        <button onClick={() => { setView("menu"); setError(""); }} style={BS("outline")}>Retour</button>
+        <button onClick={createRoom} style={BS("primary")}>Créer</button>
       </div>
     </div>
   );
 
   if (view === "join") return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h3 style={{ margin: 0, color: "#fff", fontSize: 20, fontWeight: 700 }}>Rejoindre une salle</h3>
-      <input placeholder="Votre nom" value={playerName} onChange={e => setPlayerName(e.target.value)} style={inputStyle} />
-      <input placeholder="Code de la salle" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} maxLength={5} style={{ ...inputStyle, letterSpacing: 4, textTransform: "uppercase" }} />
-      {error && <div style={{ color: "#E8453C", fontSize: 13 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 12 }}>
-        <button onClick={() => setView("menu")} style={btnStyle("outline")}>Retour</button>
-        <button onClick={joinRoom} style={btnStyle("primary")}>Rejoindre</button>
+    <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+      <h3 style={{ margin:0, color:"#fff", fontSize:20, fontWeight:700 }}>Rejoindre une salle</h3>
+      <input placeholder="Votre nom" value={playerName} onChange={e => setPlayerName(e.target.value)} style={IS} />
+      <input
+        placeholder="Code (5 lettres)" value={roomCode}
+        onChange={e => setRoomCode(e.target.value.toUpperCase())} maxLength={5}
+        style={{ ...IS, letterSpacing:6, textTransform:"uppercase", textAlign:"center" }}
+      />
+      {error && <div style={{ color:"#E8453C", fontSize:13 }}>{error}</div>}
+      <div style={{ display:"flex", gap:12 }}>
+        <button onClick={() => { setView("menu"); setError(""); }} style={BS("outline")}>Retour</button>
+        <button onClick={joinRoom} style={BS("primary")}>Rejoindre</button>
       </div>
     </div>
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <h3 style={{ margin: 0, color: "#fff", fontSize: 20, fontWeight: 700 }}>Multijoueur local</h3>
-      <p style={{ margin: 0, color: "#666", fontSize: 14, lineHeight: 1.6 }}>
-        Créez une salle et partagez le code avec vos amis (sur cet appareil ou en réseau local).
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      <h3 style={{ margin:0, color:"#fff", fontSize:20, fontWeight:700 }}>Multijoueur</h3>
+      <p style={{ margin:0, color:"#666", fontSize:14, lineHeight:1.7 }}>
+        Créez une salle et partagez le code. Chaque joueur ouvre le site dans son propre onglet (même navigateur) et entre le code pour rejoindre.
       </p>
-      <button onClick={() => setView("create")} style={btnStyle("primary")}>Créer une salle</button>
-      <button onClick={() => setView("join")} style={btnStyle("outline")}>Rejoindre une salle</button>
-      <button onClick={onBack} style={{ ...btnStyle("outline"), marginTop: 8, opacity: 0.6 }}>← Retour</button>
+      <button onClick={() => setView("create")} style={BS("primary")}>Créer une salle</button>
+      <button onClick={() => setView("join")}   style={BS("outline")}>Rejoindre une salle</button>
+      <button onClick={onBack} style={{ ...BS("outline"), marginTop:8, opacity:.5 }}>← Retour</button>
     </div>
   );
 }
 
 // ─── Solo Setup ───────────────────────────────────────────────────────────────
 function SoloSetup({ onStartGame, onBack }) {
-  const [playerName, setPlayerName] = useState("Vous");
-  const [numBots, setNumBots] = useState(2);
+  const [name,       setName]       = useState("Vous");
+  const [numBots,    setNumBots]    = useState(2);
   const [difficulty, setDifficulty] = useState("medium");
-  const difficultyLabel = { easy: "Facile", medium: "Moyen", hard: "Difficile" };
+  const DL = { easy:"Facile", medium:"Moyen", hard:"Difficile" };
 
   const start = () => {
-    const botNames = ["Alice", "Bob", "Charlie", "Diana"];
-    const players = [
-      { name: playerName || "Vous", type: "human" },
-      ...Array.from({ length: numBots }, (_, i) => ({
-        name: botNames[i],
-        type: "bot",
-        difficulty,
-      })),
-    ];
-    onStartGame(players);
+    const botNames = ["Alice","Bob","Charlie"];
+    onStartGame([
+      { name: name||"Vous", type:"human" },
+      ...Array.from({length:numBots},(_,i) => ({ name:botNames[i], type:"bot", difficulty })),
+    ]);
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h3 style={{ margin: 0, color: "#fff", fontSize: 20, fontWeight: 700 }}>Mode Solo</h3>
+    <div style={{ display:"flex", flexDirection:"column", gap:22 }}>
+      <h3 style={{ margin:0, color:"#fff", fontSize:20, fontWeight:700 }}>Mode Solo</h3>
       <div>
-        <label style={{ display: "block", fontSize: 13, color: "#888", marginBottom: 6 }}>Votre nom</label>
-        <input value={playerName} onChange={e => setPlayerName(e.target.value)} style={inputStyle} />
+        <label style={{ display:"block", fontSize:13, color:"#777", marginBottom:6 }}>Votre nom</label>
+        <input value={name} onChange={e => setName(e.target.value)} style={IS} />
       </div>
       <div>
-        <label style={{ display: "block", fontSize: 13, color: "#888", marginBottom: 10 }}>Nombre de bots ({numBots})</label>
-        <div style={{ display: "flex", gap: 8 }}>
-          {[1, 2, 3].map(n => (
-            <button key={n} onClick={() => setNumBots(n)} style={numBots === n ? btnStyle("primary") : btnStyle("outline")}>
-              {n}
-            </button>
-          ))}
+        <label style={{ display:"block", fontSize:13, color:"#777", marginBottom:10 }}>Nombre de bots ({numBots})</label>
+        <div style={{ display:"flex", gap:8 }}>
+          {[1,2,3].map(n => <button key={n} onClick={() => setNumBots(n)} style={numBots===n?BS("primary"):BS("outline")}>{n}</button>)}
         </div>
       </div>
       <div>
-        <label style={{ display: "block", fontSize: 13, color: "#888", marginBottom: 10 }}>Difficulté des bots</label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {["easy", "medium", "hard"].map(d => (
-            <button key={d} onClick={() => setDifficulty(d)} style={difficulty === d ? btnStyle("accent") : btnStyle("outline")}>
-              {difficultyLabel[d]}
-            </button>
-          ))}
+        <label style={{ display:"block", fontSize:13, color:"#777", marginBottom:10 }}>Difficulté</label>
+        <div style={{ display:"flex", gap:8 }}>
+          {["easy","medium","hard"].map(d => <button key={d} onClick={() => setDifficulty(d)} style={difficulty===d?BS("accent"):BS("outline")}>{DL[d]}</button>)}
         </div>
       </div>
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-        <button onClick={onBack} style={btnStyle("outline")}>← Retour</button>
-        <button onClick={start} style={btnStyle("primary")}>Jouer !</button>
+      <div style={{ display:"flex", gap:12, marginTop:4 }}>
+        <button onClick={onBack} style={BS("outline")}>← Retour</button>
+        <button onClick={start}  style={BS("primary")}>Jouer !</button>
       </div>
     </div>
   );
 }
 
-// ─── Shared Styles ────────────────────────────────────────────────────────────
-const inputStyle = {
-  background: "#1a1a2e",
-  border: "1.5px solid #333",
-  borderRadius: 10,
-  color: "#fff",
-  padding: "12px 16px",
-  fontSize: 15,
-  fontFamily: "'Nunito', sans-serif",
-  outline: "none",
-  width: "100%",
-  boxSizing: "border-box",
+// ─── Shared styles ────────────────────────────────────────────────────────────
+const IS = {
+  background:"#1a1a2e", border:"1.5px solid #2e2e4a", borderRadius:10,
+  color:"#fff", padding:"12px 16px", fontSize:15,
+  fontFamily:"'Nunito',sans-serif", outline:"none",
+  width:"100%", boxSizing:"border-box",
 };
-
-const btnStyle = (variant, disabled = false) => ({
-  padding: "12px 24px",
-  borderRadius: 12,
-  border: "none",
-  cursor: disabled ? "not-allowed" : "pointer",
-  fontFamily: "'Nunito', sans-serif",
-  fontWeight: 700,
-  fontSize: 15,
-  flex: 1,
-  opacity: disabled ? 0.5 : 1,
-  transition: "opacity 0.15s",
-  ...(variant === "primary" ? {
-    background: "#E8453C",
-    color: "#fff",
-  } : variant === "accent" ? {
-    background: "#F5C518",
-    color: "#222",
-  } : {
-    background: "transparent",
-    color: "#aaa",
-    border: "1.5px solid #333",
-  }),
+const BS = (v, dis=false) => ({
+  padding:"12px 24px", borderRadius:12, border:"none",
+  cursor: dis?"not-allowed":"pointer",
+  fontFamily:"'Nunito',sans-serif", fontWeight:700, fontSize:15, flex:1,
+  opacity: dis?0.45:1, transition:"opacity .15s",
+  ...(v==="primary" ? { background:"#E8453C", color:"#fff" }
+    : v==="accent"  ? { background:"#F5C518", color:"#222" }
+    :                  { background:"transparent", color:"#aaa", border:"1.5px solid #2e2e4a" }),
 });
 
-// ─── Home Screen ──────────────────────────────────────────────────────────────
+// ─── Home ─────────────────────────────────────────────────────────────────────
 function HomeScreen({ onNav }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
-      {/* Logo */}
-      <div style={{ marginBottom: 48, textAlign: "center" }}>
-        <div style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 100, height: 100,
-          borderRadius: 24,
-          background: "linear-gradient(135deg, #E8453C, #F5C518)",
-          marginBottom: 20,
-          boxShadow: "0 8px 32px rgba(232,69,60,0.3)",
-        }}>
-          <span style={{ fontSize: 48, fontWeight: 900, color: "#fff", fontFamily: "'Nunito', sans-serif", letterSpacing: -2 }}>U</span>
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center" }}>
+      <div style={{ marginBottom:40, textAlign:"center" }}>
+        <div style={{ display:"inline-flex", alignItems:"center", justifyContent:"center",
+          width:96, height:96, borderRadius:22,
+          background:"linear-gradient(135deg,#E8453C,#F5C518)",
+          marginBottom:18, boxShadow:"0 8px 32px rgba(232,69,60,.35)" }}>
+          <span style={{ fontSize:46, fontWeight:900, color:"#fff", fontFamily:"'Nunito',sans-serif", letterSpacing:-2 }}>U</span>
         </div>
-        <h1 style={{ fontSize: 52, fontWeight: 900, margin: 0, color: "#fff", letterSpacing: -2, fontFamily: "'Nunito', sans-serif" }}>
-          uno
-        </h1>
-        <p style={{ color: "#555", margin: "8px 0 0", fontSize: 15 }}>La version épurée du classique</p>
+        <h1 style={{ fontSize:50, fontWeight:900, margin:0, color:"#fff", letterSpacing:-2, fontFamily:"'Nunito',sans-serif" }}>uno</h1>
+        <p style={{ color:"#444", margin:"8px 0 0", fontSize:14 }}>La version épurée du classique</p>
       </div>
 
-      {/* Cards preview */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 48, transform: "rotate(-2deg)" }}>
-        {[
-          { color: "red", value: "7" },
-          { color: "yellow", value: "skip" },
-          { color: "blue", value: "draw2" },
-          { color: "green", value: "reverse" },
-          { color: "wild", value: "wild" },
-        ].map((c, i) => (
-          <div key={i} style={{ transform: `rotate(${(i - 2) * 5}deg)` }}>
-            <UnoCard card={c} />
-          </div>
+      <div style={{ display:"flex", gap:10, marginBottom:44, transform:"rotate(-1.5deg)" }}>
+        {[{color:"red",value:"7"},{color:"yellow",value:"skip"},{color:"blue",value:"draw2"},{color:"green",value:"reverse"},{color:"wild",value:"wild"}].map((c,i) => (
+          <div key={i} style={{ transform:`rotate(${(i-2)*6}deg)` }}><UnoCard card={c} /></div>
         ))}
       </div>
 
-      {/* Menu */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", maxWidth: 320 }}>
+      <div style={{ display:"flex", flexDirection:"column", gap:12, width:"100%", maxWidth:300 }}>
         <button onClick={() => onNav("solo")} style={{
-          background: "linear-gradient(135deg, #E8453C, #C0392B)",
-          border: "none", borderRadius: 16, padding: "18px 24px",
-          color: "#fff", fontSize: 18, fontWeight: 800, cursor: "pointer",
-          fontFamily: "'Nunito', sans-serif", textAlign: "left",
-          boxShadow: "0 4px 20px rgba(232,69,60,0.3)",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          <span>Solo vs Bots</span>
-          <span style={{ fontSize: 22 }}>🤖</span>
-        </button>
+          background:"linear-gradient(135deg,#E8453C,#C0392B)", border:"none", borderRadius:16,
+          padding:"18px 22px", color:"#fff", fontSize:17, fontWeight:800, cursor:"pointer",
+          fontFamily:"'Nunito',sans-serif", textAlign:"left",
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          boxShadow:"0 4px 20px rgba(232,69,60,.3)",
+        }}>Solo vs Bots <span style={{fontSize:22}}>🤖</span></button>
         <button onClick={() => onNav("multi")} style={{
-          background: "linear-gradient(135deg, #2980B9, #1a5c8a)",
-          border: "none", borderRadius: 16, padding: "18px 24px",
-          color: "#fff", fontSize: 18, fontWeight: 800, cursor: "pointer",
-          fontFamily: "'Nunito', sans-serif", textAlign: "left",
-          boxShadow: "0 4px 20px rgba(41,128,185,0.3)",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          <span>Multijoueur</span>
-          <span style={{ fontSize: 22 }}>👥</span>
-        </button>
+          background:"linear-gradient(135deg,#2980B9,#1a5c8a)", border:"none", borderRadius:16,
+          padding:"18px 22px", color:"#fff", fontSize:17, fontWeight:800, cursor:"pointer",
+          fontFamily:"'Nunito',sans-serif", textAlign:"left",
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          boxShadow:"0 4px 20px rgba(41,128,185,.3)",
+        }}>Multijoueur <span style={{fontSize:22}}>👥</span></button>
       </div>
 
-      {/* Rules */}
-      <div style={{ marginTop: 40, padding: "20px 24px", background: "#111", borderRadius: 16, maxWidth: 400, width: "100%" }}>
-        <div style={{ fontSize: 12, color: "#555", fontWeight: 700, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Rappel des règles</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {[
-            ["⊘", "Skip — passe le tour du suivant"],
-            ["⇄", "Reverse — inverse le sens"],
-            ["+2", "Draw 2 — le suivant pioche 2"],
-            ["🎨", "Wild — choisit la couleur"],
-            ["+4", "Wild+4 — pioche 4 + couleur"],
-          ].map(([sym, desc]) => (
-            <div key={sym} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 15, width: 28, textAlign: "center" }}>{sym}</span>
-              <span style={{ color: "#666", fontSize: 13 }}>{desc}</span>
-            </div>
-          ))}
-        </div>
+      <div style={{ marginTop:36, padding:"18px 22px", background:"#0c0c18", borderRadius:14, maxWidth:360, width:"100%", border:"1px solid #1e1e2e" }}>
+        <div style={{ fontSize:11, color:"#444", fontWeight:700, marginBottom:10, textTransform:"uppercase", letterSpacing:1 }}>Règles rapides</div>
+        {[["⊘","Skip — saute le joueur suivant"],["⇄","Reverse — inverse le sens"],
+          ["+2","Draw 2 — le suivant pioche 2"],["🎨","Wild — choisit la couleur"],["+4","Wild+4 — pioche 4 + couleur"]
+        ].map(([s,d]) => (
+          <div key={s} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:5 }}>
+            <span style={{ fontSize:14, width:26, textAlign:"center" }}>{s}</span>
+            <span style={{ color:"#555", fontSize:13 }}>{d}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── App Root ─────────────────────────────────────────────────────────────────
+// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState("home"); // home | solo | multi | game
-  const [gamePlayers, setGamePlayers] = useState(null);
+  const [screen,  setScreen]  = useState("home");
+  const [players, setPlayers] = useState(null);
 
-  const startGame = (players) => {
-    setGamePlayers(players);
-    setScreen("game");
-  };
+  const startGame = p => { setPlayers(p); setScreen("game"); };
 
-  if (screen === "game" && gamePlayers) {
-    return <GameScreen players={gamePlayers} onBack={() => setScreen("home")} />;
-  }
+  if (screen === "game" && players)
+    return <GameScreen players={players} onBack={() => setScreen("home")} />;
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#0f0f1a",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      fontFamily: "'Nunito', sans-serif",
-      padding: "40px 20px 60px",
-    }}>
+    <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", flexDirection:"column",
+      alignItems:"center", fontFamily:"'Nunito',sans-serif", padding:"36px 20px 60px" }}>
       <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-
-      <div style={{ width: "100%", maxWidth: 480 }}>
-        {screen === "home" && <HomeScreen onNav={setScreen} />}
-        {screen === "solo" && (
-          <div style={{ background: "#111", borderRadius: 24, padding: "32px 28px" }}>
-            <SoloSetup onStartGame={startGame} onBack={() => setScreen("home")} />
-          </div>
-        )}
-        {screen === "multi" && (
-          <div style={{ background: "#111", borderRadius: 24, padding: "32px 28px" }}>
-            <MultiplayerLobby onStartGame={startGame} onBack={() => setScreen("home")} />
-          </div>
-        )}
+      <div style={{ width:"100%", maxWidth:480 }}>
+        {screen==="home"  && <HomeScreen onNav={setScreen} />}
+        {screen==="solo"  && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><SoloSetup onStartGame={startGame} onBack={() => setScreen("home")} /></div>}
+        {screen==="multi" && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><MultiplayerLobby onStartGame={startGame} onBack={() => setScreen("home")} /></div>}
       </div>
     </div>
   );
