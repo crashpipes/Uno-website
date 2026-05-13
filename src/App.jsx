@@ -126,44 +126,33 @@ function applyCard(state, playerIdx, card, chosenColor) {
     s.unoCallBy = playerIdx;
   }
 
-  // step(from, dist) = index of player 'dist' steps away in current direction
   const step = (from, dist) => ((from + s.direction * dist) % n + n) % n;
 
   if (card.value === "skip") {
-    // Skip next player: move 2 steps
     s.currentPlayer = step(playerIdx, 2);
     s.lastAction = "⊘ Skip !";
-
   } else if (card.value === "reverse") {
     s.direction *= -1;
     if (n === 2) {
-      // 2-player: reverse = play again
       s.currentPlayer = playerIdx;
     } else {
-      // Move 1 step in the NEW direction
       s.currentPlayer = ((playerIdx + s.direction) % n + n) % n;
     }
     s.lastAction = "⇄ Sens inversé !";
-
   } else if (card.value === "draw2") {
-    // Next player draws 2 and is skipped
     const victim = step(playerIdx, 1);
     replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
     replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
     s.currentPlayer = step(playerIdx, 2);
     s.lastAction = "+2 !";
-
   } else if (card.value === "wild4") {
-    // Next player draws 4 and is skipped
     const victim = step(playerIdx, 1);
     for (let i = 0; i < 4; i++) { replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop()); }
     s.currentPlayer = step(playerIdx, 2);
     s.lastAction = "+4 !";
-
   } else if (card.value === "wild") {
     s.currentPlayer = step(playerIdx, 1);
     s.lastAction = "🎨 Wild !";
-
   } else {
     s.currentPlayer = step(playerIdx, 1);
     s.lastAction = "";
@@ -183,18 +172,24 @@ function drawCard(state, playerIdx) {
 }
 
 // ─── Card Component ───────────────────────────────────────────────────────────
-function UnoCard({ card, onClick, small, hidden, selected, disabled }) {
-  const w = small ? 38 : 62, h = small ? 56 : 92;
+// size: "small" | "medium" | "large"
+function UnoCard({ card, onClick, size = "medium", hidden, selected, disabled }) {
+  const dims = {
+    small:  { w: 42, h: 62,  fontSize: 14, labelSize: 9,  innerW: 26, innerH: 38 },
+    medium: { w: 68, h: 100, fontSize: 22, labelSize: 12, innerW: 42, innerH: 62 },
+    large:  { w: 82, h: 120, fontSize: 26, labelSize: 14, innerW: 52, innerH: 76 },
+  };
+  const d = dims[size] || dims.medium;
 
   if (hidden) return (
     <div style={{
-      width: w, height: h, borderRadius: 9,
+      width: d.w, height: d.h, borderRadius: 10,
       background: "linear-gradient(135deg,#1a1a2e,#0f3460)",
       border: "2px solid #e94560", flexShrink: 0,
       display: "flex", alignItems: "center", justifyContent: "center",
       boxShadow: "0 2px 8px rgba(0,0,0,.35)",
     }}>
-      <span style={{ color:"#e94560", fontWeight:800, fontSize:small?9:15, fontFamily:"'Nunito',sans-serif" }}>UNO</span>
+      <span style={{ color:"#e94560", fontWeight:800, fontSize: size==="small"?9:13, fontFamily:"'Nunito',sans-serif" }}>UNO</span>
     </div>
   );
 
@@ -205,31 +200,31 @@ function UnoCard({ card, onClick, small, hidden, selected, disabled }) {
 
   return (
     <div onClick={() => !disabled && onClick && onClick(card)} style={{
-      width: w, height: h, borderRadius: 10,
+      width: d.w, height: d.h, borderRadius: 11,
       background: c.bg, border: selected ? "3px solid #fff" : `2px solid ${c.border}`,
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       cursor: disabled ? "default" : onClick ? "pointer" : "default",
       flexShrink: 0, position: "relative", userSelect: "none",
-      transform: selected ? "translateY(-14px)" : "none",
+      transform: selected ? "translateY(-16px)" : "none",
       transition: "transform .15s, box-shadow .15s",
-      boxShadow: selected ? "0 10px 28px rgba(0,0,0,.5)" : "0 2px 8px rgba(0,0,0,.25)",
-      opacity: disabled ? 0.45 : 1,
+      boxShadow: selected ? "0 12px 32px rgba(0,0,0,.55)" : "0 2px 10px rgba(0,0,0,.28)",
+      opacity: disabled ? 0.42 : 1,
     }}>
       {card.color !== "wild" && <>
-        <span style={{ position:"absolute", top:3, left:5, fontSize:small?8:11, color:c.text, fontWeight:700 }}>{label}</span>
-        <span style={{ position:"absolute", bottom:3, right:5, fontSize:small?8:11, color:c.text, fontWeight:700, transform:"rotate(180deg)" }}>{label}</span>
+        <span style={{ position:"absolute", top:4, left:6, fontSize:d.labelSize, color:c.text, fontWeight:700 }}>{label}</span>
+        <span style={{ position:"absolute", bottom:4, right:6, fontSize:d.labelSize, color:c.text, fontWeight:700, transform:"rotate(180deg)" }}>{label}</span>
       </>}
       <div style={{
-        background:"rgba(255,255,255,.15)", borderRadius:7,
-        width:small?24:38, height:small?34:56,
+        background:"rgba(255,255,255,.15)", borderRadius:8,
+        width:d.innerW, height:d.innerH,
         display:"flex", alignItems:"center", justifyContent:"center",
         border:"1.5px solid rgba(255,255,255,.22)",
       }}>
-        <span style={{ fontSize:small?(isAction?10:13):(isAction?18:24), fontWeight:800, color:c.text, fontFamily:"'Nunito',sans-serif", lineHeight:1 }}>{label}</span>
+        <span style={{ fontSize: isAction ? d.fontSize * 0.78 : d.fontSize, fontWeight:800, color:c.text, fontFamily:"'Nunito',sans-serif", lineHeight:1 }}>{label}</span>
       </div>
       {card.color === "wild" && (
-        <div style={{ display:"flex", gap:2, marginTop:3 }}>
-          {COLORS.map(col => <div key={col} style={{ width:5, height:5, borderRadius:"50%", background:COLOR_MAP[col].bg }} />)}
+        <div style={{ display:"flex", gap:3, marginTop:4 }}>
+          {COLORS.map(col => <div key={col} style={{ width:6, height:6, borderRadius:"50%", background:COLOR_MAP[col].bg }} />)}
         </div>
       )}
     </div>
@@ -245,7 +240,7 @@ function ColorPicker({ onPick }) {
         <div style={{ display:"flex", gap:16 }}>
           {COLORS.map(col => (
             <button key={col} onClick={() => onPick(col)} style={{
-              width:60, height:60, borderRadius:12, background:COLOR_MAP[col].bg,
+              width:64, height:64, borderRadius:14, background:COLOR_MAP[col].bg,
               border:`3px solid ${COLOR_MAP[col].border}`, cursor:"pointer", transition:"transform .15s",
             }}
               onMouseEnter={e => e.currentTarget.style.transform="scale(1.12)"}
@@ -369,7 +364,7 @@ function GameScreen({ players, onBack }) {
           <span style={{ color:"#888", fontSize:13 }}>
             {gs.lastAction || (isMyTurn ? "▶ Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}
           </span>
-          <span style={{ color:"#333", fontSize:13 }}>{gs.direction===1?"↻":"↺"}</span>
+          <span style={{ color:"#555", fontSize:13 }}>{gs.direction===1?"↻":"↺"}</span>
         </div>
         <button onClick={restart} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>Reset</button>
       </div>
@@ -383,7 +378,7 @@ function GameScreen({ players, onBack }) {
             </div>
             <div style={{ display:"flex", justifyContent:"center" }}>
               {(gs.hands[p.idx]||[]).slice(0,12).map((c,ci) => (
-                <div key={ci} style={{ marginLeft:ci>0?-16:0 }}><UnoCard card={c} small hidden /></div>
+                <div key={ci} style={{ marginLeft:ci>0?-18:0 }}><UnoCard card={c} size="small" hidden /></div>
               ))}
               {(gs.hands[p.idx]?.length||0)>12 && <span style={{ color:"#555", fontSize:11, alignSelf:"center", marginLeft:4 }}>+{gs.hands[p.idx].length-12}</span>}
             </div>
@@ -401,7 +396,7 @@ function GameScreen({ players, onBack }) {
             <div style={{ fontSize:11, color:"#444" }}>{gs.hands[p.idx]?.length} cartes</div>
             <div style={{ display:"flex", flexDirection:"column" }}>
               {(gs.hands[p.idx]||[]).slice(0,8).map((c,ci) => (
-                <div key={ci} style={{ marginTop:ci>0?-30:0 }}><UnoCard card={c} small hidden /></div>
+                <div key={ci} style={{ marginTop:ci>0?-32:0 }}><UnoCard card={c} size="small" hidden /></div>
               ))}
             </div>
           </div>
@@ -410,15 +405,15 @@ function GameScreen({ players, onBack }) {
         {/* Draw pile */}
         <div style={{ textAlign:"center" }}>
           <div onClick={isMyTurn?handleDraw:undefined} style={{ cursor:isMyTurn?"pointer":"default" }}>
-            <UnoCard card={{color:"wild",value:"wild"}} hidden disabled={!isMyTurn} />
+            <UnoCard card={{color:"wild",value:"wild"}} size="medium" hidden disabled={!isMyTurn} />
           </div>
           <div style={{ color:"#444", fontSize:11, marginTop:4 }}>{gs.deck.length} cartes</div>
         </div>
 
         {/* Discard */}
         <div style={{ textAlign:"center" }}>
-          <div style={{ padding:4, borderRadius:14, background:`${topColor.bg}22`, border:`2px solid ${topColor.bg}55` }}>
-            <UnoCard card={topCard} />
+          <div style={{ padding:5, borderRadius:16, background:`${topColor.bg}22`, border:`2px solid ${topColor.bg}55` }}>
+            <UnoCard card={topCard} size="medium" />
           </div>
           <div style={{ color:topColor.bg, fontSize:11, marginTop:4, fontWeight:700 }}>{gs.activeColor.toUpperCase()}</div>
         </div>
@@ -434,8 +429,8 @@ function GameScreen({ players, onBack }) {
       )}
 
       {/* Player hand */}
-      <div style={{ background:"#0c0c18", borderTop:"1px solid #1e1e2e", padding:"14px 20px 20px" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+      <div style={{ background:"#0c0c18", borderTop:"1px solid #1e1e2e", padding:"16px 20px 24px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
           <span style={{ color:isMyTurn?"#F5C518":"#444", fontSize:14, fontWeight:isMyTurn?700:400 }}>
             {isMyTurn?"▶ Votre tour":"Vos cartes"} — {gs.hands[humanIdx]?.length}
           </span>
@@ -447,24 +442,27 @@ function GameScreen({ players, onBack }) {
             }}>UNO !</button>
           )}
         </div>
-        <div style={{ display:"flex", gap:7, overflowX:"auto", paddingBottom:6 }}>
+        {/* Large cards in hand */}
+        <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:8, paddingTop:4 }}>
           {(gs.hands[humanIdx]||[]).map(card => {
             const playable = isMyTurn && canPlay(card, topCard, gs.activeColor);
             return (
               <div key={card.id} style={{ flexShrink:0 }}>
-                <UnoCard card={card} onClick={playable?handleCardClick:undefined} selected={selected?.id===card.id} disabled={!playable} />
+                <UnoCard card={card} size="large" onClick={playable?handleCardClick:undefined} selected={selected?.id===card.id} disabled={!playable} />
               </div>
             );
           })}
         </div>
-        {selected && <div style={{ textAlign:"center", marginTop:6, color:"#555", fontSize:12 }}>Cliquez à nouveau pour jouer</div>}
+        {selected && <div style={{ textAlign:"center", marginTop:8, color:"#555", fontSize:12 }}>Cliquez à nouveau pour jouer</div>}
       </div>
     </div>
   );
 }
 
 // ─── localStorage Room helpers ────────────────────────────────────────────────
-const LS       = "uno_rooms_v2";
+// FIX: rooms are never deleted during game start — status transitions to "started"
+// and gameState is written in. Each client polls and reacts to the status change.
+const LS       = "uno_rooms_v3";
 const getRooms = ()        => { try { return JSON.parse(localStorage.getItem(LS)||"{}"); } catch { return {}; } };
 const getRoom  = code      => getRooms()[code] || null;
 const putRoom  = (code, r) => { const all = getRooms(); all[code] = r; localStorage.setItem(LS, JSON.stringify(all)); };
@@ -479,13 +477,26 @@ function MultiplayerLobby({ onStartGame, onBack }) {
   const [roomData,   setRoomData]   = useState(null);
   const [error,      setError]      = useState("");
   const pollRef = useRef(null);
+  const myNameRef = useRef("");
 
-  // Poll localStorage every second so lobby updates live across tabs
+  // Poll localStorage every 800ms so lobby & game-start update across tabs
   useEffect(() => {
     if (!myRoom) return;
-    const poll = () => { const r = getRoom(myRoom); if (r) setRoomData({...r}); };
+
+    const poll = () => {
+      const r = getRoom(myRoom);
+      if (!r) return;
+      setRoomData({...r});
+
+      // FIX: detect when host has started the game
+      if (r.status === "started") {
+        clearInterval(pollRef.current);
+        onStartGame(r.players);
+      }
+    };
+
     poll();
-    pollRef.current = setInterval(poll, 1000);
+    pollRef.current = setInterval(poll, 800);
     return () => clearInterval(pollRef.current);
   }, [myRoom]);
 
@@ -494,6 +505,7 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     const code = Math.random().toString(36).substring(2,7).toUpperCase();
     const room = { code, host: playerName.trim(), players:[{name:playerName.trim(),type:"human"}], status:"waiting" };
     putRoom(code, room);
+    myNameRef.current = playerName.trim();
     setMyRoom(code); setRoomData(room); setView("room"); setError("");
   };
 
@@ -508,6 +520,7 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     if (r.players.find(p => p.name === playerName.trim())) { setError("Ce nom est déjà pris dans cette salle"); return; }
     r.players.push({name:playerName.trim(),type:"human"});
     putRoom(code, r);
+    myNameRef.current = playerName.trim();
     setMyRoom(code); setRoomData(r); setView("room"); setError("");
   };
 
@@ -515,8 +528,13 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     const r = getRoom(myRoom);
     if (!r) { setError("Salle introuvable"); return; }
     if (r.players.length < 2) { setError("Il faut au moins 2 joueurs"); return; }
+    // FIX: set status to "started" so other tabs pick it up; DON'T delete the room yet
+    r.status = "started";
+    putRoom(myRoom, r);
+    // Host also starts immediately
     clearInterval(pollRef.current);
-    delRoom(myRoom);
+    // Clean up after a delay so other tabs have time to read it
+    setTimeout(() => delRoom(myRoom), 5000);
     onStartGame(r.players);
   };
 
@@ -525,8 +543,8 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     if (myRoom) {
       const r = getRoom(myRoom);
       if (r) {
-        if (r.host === playerName.trim()) delRoom(myRoom);
-        else { r.players = r.players.filter(p => p.name !== playerName.trim()); putRoom(myRoom, r); }
+        if (r.host === (myNameRef.current || playerName.trim())) delRoom(myRoom);
+        else { r.players = r.players.filter(p => p.name !== (myNameRef.current || playerName.trim())); putRoom(myRoom, r); }
       }
     }
     setMyRoom(null); setRoomData(null); setView("menu"); setError("");
@@ -556,13 +574,13 @@ function MultiplayerLobby({ onStartGame, onBack }) {
       {error && <div style={{ color:"#E8453C", fontSize:13 }}>{error}</div>}
       <div style={{ display:"flex", gap:12 }}>
         <button onClick={leaveRoom} style={BS("outline")}>Quitter</button>
-        {room.host === playerName.trim() && (
+        {room.host === (myNameRef.current || playerName.trim()) && (
           <button onClick={startGame} disabled={room.players.length < 2} style={BS("primary", room.players.length < 2)}>
             Lancer la partie
           </button>
         )}
       </div>
-      {room.host !== playerName.trim() && (
+      {room.host !== (myNameRef.current || playerName.trim()) && (
         <div style={{ textAlign:"center", color:"#555", fontSize:13 }}>En attente de l'hôte…</div>
       )}
     </div>
@@ -686,7 +704,7 @@ function HomeScreen({ onNav }) {
 
       <div style={{ display:"flex", gap:10, marginBottom:44, transform:"rotate(-1.5deg)" }}>
         {[{color:"red",value:"7"},{color:"yellow",value:"skip"},{color:"blue",value:"draw2"},{color:"green",value:"reverse"},{color:"wild",value:"wild"}].map((c,i) => (
-          <div key={i} style={{ transform:`rotate(${(i-2)*6}deg)` }}><UnoCard card={c} /></div>
+          <div key={i} style={{ transform:`rotate(${(i-2)*6}deg)` }}><UnoCard card={c} size="medium" /></div>
         ))}
       </div>
 
