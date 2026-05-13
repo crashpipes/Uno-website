@@ -44,14 +44,6 @@ function canPlay(card, topCard, activeColor) {
   return false;
 }
 
-function calcScore(hand) {
-  return hand.reduce((sum, c) => {
-    if (c.value === "wild" || c.value === "wild4") return sum + 50;
-    if (["skip","reverse","draw2"].includes(c.value)) return sum + 20;
-    return sum + parseInt(c.value, 10);
-  }, 0);
-}
-
 // ─── Bot AI ───────────────────────────────────────────────────────────────────
 function botChooseCard(hand, topCard, activeColor, difficulty) {
   const playable = hand.filter(c => canPlay(c, topCard, activeColor));
@@ -64,7 +56,6 @@ function botChooseCard(hand, topCard, activeColor, difficulty) {
     if (nonWild.length > 0) return nonWild[0];
     return playable[0];
   }
-  // hard
   const nonWild = playable.filter(c => c.color !== "wild");
   const action  = nonWild.filter(c => ["skip","reverse","draw2"].includes(c.value));
   const wild4   = playable.filter(c => c.value === "wild4");
@@ -93,15 +84,18 @@ function initGame(players) {
   for (let i = 0; i < 7; i++) players.forEach((_, pi) => hands[pi].push(deck.pop()));
   let top;
   do { top = deck.pop(); } while (top.color === "wild");
-  return { deck, discard: [top], hands, currentPlayer: 0, direction: 1,
-           activeColor: top.color, status: "playing", lastAction: "",
-           unoCallable: false, unoCallBy: null };
+  return {
+    deck, discard: [top], hands, currentPlayer: 0, direction: 1,
+    activeColor: top.color, status: "playing", lastAction: "",
+    unoCallable: false, unoCallBy: null, seq: 0,
+  };
 }
 
 function replenishDeck(s) {
   if (s.deck.length === 0 && s.discard.length > 1) {
-    const top = s.discard.pop();
-    s.deck = shuffle(s.discard);
+    const top = s.discard[s.discard.length - 1];
+    const rest = s.discard.slice(0, s.discard.length - 1);
+    s.deck = shuffle(rest);
     s.discard = [top];
   }
 }
@@ -109,55 +103,38 @@ function replenishDeck(s) {
 function applyCard(state, playerIdx, card, chosenColor) {
   const s = JSON.parse(JSON.stringify(state));
   const n = s.hands.length;
-
   s.hands[playerIdx] = s.hands[playerIdx].filter(c => c.id !== card.id);
   s.discard.push(card);
   s.activeColor = chosenColor || card.color;
   s.unoCallable = false;
   s.unoCallBy = null;
+  s.seq = (s.seq || 0) + 1;
 
-  if (s.hands[playerIdx].length === 0) {
-    s.status = "ended";
-    s.winner = playerIdx;
-    return s;
-  }
-  if (s.hands[playerIdx].length === 1) {
-    s.unoCallable = true;
-    s.unoCallBy = playerIdx;
-  }
+  if (s.hands[playerIdx].length === 0) { s.status = "ended"; s.winner = playerIdx; return s; }
+  if (s.hands[playerIdx].length === 1) { s.unoCallable = true; s.unoCallBy = playerIdx; }
 
   const step = (from, dist) => ((from + s.direction * dist) % n + n) % n;
 
   if (card.value === "skip") {
-    s.currentPlayer = step(playerIdx, 2);
-    s.lastAction = "⊘ Skip !";
+    s.currentPlayer = step(playerIdx, 2); s.lastAction = "⊘ Skip !";
   } else if (card.value === "reverse") {
     s.direction *= -1;
-    if (n === 2) {
-      s.currentPlayer = playerIdx;
-    } else {
-      s.currentPlayer = ((playerIdx + s.direction) % n + n) % n;
-    }
+    s.currentPlayer = n === 2 ? playerIdx : ((playerIdx + s.direction) % n + n) % n;
     s.lastAction = "⇄ Sens inversé !";
   } else if (card.value === "draw2") {
     const victim = step(playerIdx, 1);
     replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
     replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop());
-    s.currentPlayer = step(playerIdx, 2);
-    s.lastAction = "+2 !";
+    s.currentPlayer = step(playerIdx, 2); s.lastAction = "+2 !";
   } else if (card.value === "wild4") {
     const victim = step(playerIdx, 1);
     for (let i = 0; i < 4; i++) { replenishDeck(s); if (s.deck.length) s.hands[victim].push(s.deck.pop()); }
-    s.currentPlayer = step(playerIdx, 2);
-    s.lastAction = "+4 !";
+    s.currentPlayer = step(playerIdx, 2); s.lastAction = "+4 !";
   } else if (card.value === "wild") {
-    s.currentPlayer = step(playerIdx, 1);
-    s.lastAction = "🎨 Wild !";
+    s.currentPlayer = step(playerIdx, 1); s.lastAction = "🎨 Wild !";
   } else {
-    s.currentPlayer = step(playerIdx, 1);
-    s.lastAction = "";
+    s.currentPlayer = step(playerIdx, 1); s.lastAction = "";
   }
-
   return s;
 }
 
@@ -168,16 +145,16 @@ function drawCard(state, playerIdx) {
   if (s.deck.length) s.hands[playerIdx].push(s.deck.pop());
   s.currentPlayer = ((playerIdx + s.direction) % n + n) % n;
   s.lastAction = "Pioche";
+  s.seq = (s.seq || 0) + 1;
   return s;
 }
 
 // ─── Card Component ───────────────────────────────────────────────────────────
-// size: "small" | "medium" | "large"
 function UnoCard({ card, onClick, size = "medium", hidden, selected, disabled }) {
   const dims = {
-    small:  { w: 42, h: 62,  fontSize: 14, labelSize: 9,  innerW: 26, innerH: 38 },
-    medium: { w: 68, h: 100, fontSize: 22, labelSize: 12, innerW: 42, innerH: 62 },
-    large:  { w: 82, h: 120, fontSize: 26, labelSize: 14, innerW: 52, innerH: 76 },
+    small:  { w: 42,  h: 62,  fontSize: 14, labelSize: 9,  innerW: 26, innerH: 38 },
+    medium: { w: 68,  h: 100, fontSize: 22, labelSize: 12, innerW: 42, innerH: 62 },
+    large:  { w: 82,  h: 120, fontSize: 26, labelSize: 14, innerW: 52, innerH: 76 },
   };
   const d = dims[size] || dims.medium;
 
@@ -253,23 +230,265 @@ function ColorPicker({ onPick }) {
   );
 }
 
-// ─── Game Screen ──────────────────────────────────────────────────────────────
+// ─── localStorage helpers ─────────────────────────────────────────────────────
+const LS_ROOMS     = "uno_rooms_v4";
+const LS_GAME      = (code) => `uno_game_v4_${code}`;
+const getRooms     = ()          => { try { return JSON.parse(localStorage.getItem(LS_ROOMS)||"{}"); } catch { return {}; } };
+const getRoom      = code        => getRooms()[code] || null;
+const putRoom      = (code, r)   => { const all = getRooms(); all[code] = r; localStorage.setItem(LS_ROOMS, JSON.stringify(all)); };
+const delRoom      = code        => { const all = getRooms(); delete all[code]; localStorage.setItem(LS_ROOMS, JSON.stringify(all)); };
+const getGameState = code        => { try { return JSON.parse(localStorage.getItem(LS_GAME(code))||"null"); } catch { return null; } };
+const putGameState = (code, gs)  => localStorage.setItem(LS_GAME(code), JSON.stringify(gs));
+const delGameState = code        => localStorage.removeItem(LS_GAME(code));
+
+// ─── Multiplayer Game Screen ──────────────────────────────────────────────────
+function MultiGameScreen({ players, myPlayerIdx, roomCode, onBack }) {
+  const [gs,         setGs]        = useState(null);
+  const [selected,   setSelected]  = useState(null);
+  const [showPicker, setShowPicker]= useState(false);
+  const [pending,    setPending]   = useState(null);
+  const [log,        setLog]       = useState([]);
+  const [showUno,    setShowUno]   = useState(false);
+  const seqRef  = useRef(-1);
+  const pollRef = useRef(null);
+  const botRef  = useRef(null);
+
+  const addLog = msg => setLog(l => [msg, ...l].slice(0, 10));
+
+  // Poll shared game state every 600ms
+  useEffect(() => {
+    const poll = () => {
+      const remote = getGameState(roomCode);
+      if (!remote) return;
+      if (remote.seq !== seqRef.current) {
+        seqRef.current = remote.seq;
+        setGs({...remote});
+      }
+    };
+    poll();
+    pollRef.current = setInterval(poll, 600);
+    return () => clearInterval(pollRef.current);
+  }, [roomCode]);
+
+  // Bot turns — only player at index 0 (host) drives bots
+  useEffect(() => {
+    if (!gs || gs.status !== "playing") return;
+    const cur = gs.currentPlayer;
+    if (players[cur].type !== "bot") return;
+    if (myPlayerIdx !== 0) return;
+    clearTimeout(botRef.current);
+    const delay = { easy:1800, medium:1300, hard:900 }[players[cur].difficulty] || 1300;
+    botRef.current = setTimeout(() => {
+      const latest = getGameState(roomCode);
+      if (!latest || latest.status !== "playing" || latest.currentPlayer !== cur) return;
+      const top  = latest.discard[latest.discard.length - 1];
+      const card = botChooseCard(latest.hands[cur], top, latest.activeColor, players[cur].difficulty);
+      let next;
+      if (!card) {
+        addLog(`${players[cur].name} pioche`);
+        next = drawCard(latest, cur);
+      } else {
+        const col = card.color === "wild" ? botChooseColor(latest.hands[cur], players[cur].difficulty) : null;
+        addLog(`${players[cur].name} joue ${card.value}${col?" → "+col:""}`);
+        next = applyCard(latest, cur, card, col);
+      }
+      putGameState(roomCode, next);
+      seqRef.current = next.seq;
+      setGs({...next});
+    }, delay);
+    return () => clearTimeout(botRef.current);
+  }, [gs?.currentPlayer, gs?.status, gs?.seq]);
+
+  // UNO button
+  useEffect(() => {
+    if (!gs) return;
+    if (gs.unoCallable && gs.unoCallBy === myPlayerIdx) {
+      setShowUno(true);
+      const t = setTimeout(() => setShowUno(false), 4000);
+      return () => clearTimeout(t);
+    }
+    setShowUno(false);
+  }, [gs?.unoCallable, gs?.unoCallBy]);
+
+  if (!gs) return (
+    <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Nunito',sans-serif" }}>
+      <span style={{ color:"#555", fontSize:16 }}>Chargement de la partie…</span>
+    </div>
+  );
+
+  const topCard  = gs.discard[gs.discard.length - 1];
+  const isMyTurn = gs.status === "playing" && gs.currentPlayer === myPlayerIdx;
+
+  const commit = (nextGs) => {
+    putGameState(roomCode, nextGs);
+    seqRef.current = nextGs.seq;
+    setGs({...nextGs});
+  };
+
+  const handleCardClick = card => {
+    if (!isMyTurn || !canPlay(card, topCard, gs.activeColor)) return;
+    if (selected?.id === card.id) {
+      if (card.color === "wild") { setPending(card); setShowPicker(true); setSelected(null); }
+      else { addLog(`${players[myPlayerIdx].name} joue ${card.value}`); commit(applyCard(gs, myPlayerIdx, card, null)); setSelected(null); }
+    } else { setSelected(card); }
+  };
+
+  const handleDraw = () => {
+    if (!isMyTurn) return;
+    addLog(`${players[myPlayerIdx].name} pioche`);
+    commit(drawCard(gs, myPlayerIdx));
+  };
+
+  const handleColorPick = col => {
+    setShowPicker(false);
+    addLog(`${players[myPlayerIdx].name} joue ${pending.value} → ${col}`);
+    commit(applyCard(gs, myPlayerIdx, pending, col));
+    setPending(null);
+  };
+
+  const restart = () => {
+    if (myPlayerIdx !== 0) return;
+    const next = initGame(players);
+    putGameState(roomCode, next);
+    seqRef.current = next.seq;
+    setGs({...next});
+    setLog([]); setSelected(null);
+  };
+
+  if (gs.status === "ended") {
+    const winner = players[gs.winner];
+    return (
+      <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Nunito',sans-serif" }}>
+        <div style={{ textAlign:"center", color:"#fff" }}>
+          <div style={{ fontSize:72, marginBottom:16 }}>{gs.winner===myPlayerIdx?"🎉":"😢"}</div>
+          <h1 style={{ fontSize:42, fontWeight:800, margin:"0 0 8px", color:gs.winner===myPlayerIdx?"#F5C518":"#E8453C" }}>
+            {gs.winner===myPlayerIdx ? "Victoire !" : `${winner.name} gagne !`}
+          </h1>
+          <p style={{ fontSize:18, color:"#666", margin:"0 0 36px" }}>
+            {gs.winner===myPlayerIdx ? "Bien joué !" : "Meilleure chance la prochaine fois…"}
+          </p>
+          <div style={{ display:"flex", gap:16, justifyContent:"center" }}>
+            {myPlayerIdx === 0 && <button onClick={restart} style={BS("primary")}>Rejouer</button>}
+            <button onClick={() => { clearInterval(pollRef.current); onBack(); }} style={BS("outline")}>Menu</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const topColor  = COLOR_MAP[gs.activeColor] || COLOR_MAP.wild;
+  const opponents = players.map((p,i) => ({...p, idx:i})).filter(p => p.idx !== myPlayerIdx);
+  const botsTop   = opponents.slice(0, Math.ceil(opponents.length / 2));
+  const botsSide  = opponents.slice(Math.ceil(opponents.length / 2));
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", flexDirection:"column", fontFamily:"'Nunito',sans-serif" }}>
+      {showPicker && <ColorPicker onPick={handleColorPick} />}
+
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 20px", borderBottom:"1px solid #1e1e2e" }}>
+        <button onClick={() => { clearInterval(pollRef.current); onBack(); }} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>← Menu</button>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <div style={{ width:10, height:10, borderRadius:"50%", background:topColor.bg }} />
+          <span style={{ color:"#888", fontSize:13 }}>
+            {gs.lastAction || (isMyTurn ? "▶ Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}
+          </span>
+          <span style={{ color:"#555", fontSize:13 }}>{gs.direction===1?"↻":"↺"}</span>
+        </div>
+        {myPlayerIdx === 0
+          ? <button onClick={restart} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>Reset</button>
+          : <div style={{ width:70 }} />}
+      </div>
+
+      <div style={{ display:"flex", justifyContent:"center", gap:40, padding:"14px 0 6px" }}>
+        {botsTop.map(p => (
+          <div key={p.idx} style={{ textAlign:"center" }}>
+            <div style={{ fontSize:12, color:p.idx===gs.currentPlayer?"#F5C518":"#555", fontWeight:p.idx===gs.currentPlayer?700:400, marginBottom:6 }}>
+              {p.name} {p.idx===gs.currentPlayer?"●":""} ({gs.hands[p.idx]?.length})
+            </div>
+            <div style={{ display:"flex", justifyContent:"center" }}>
+              {(gs.hands[p.idx]||[]).slice(0,12).map((c,ci) => (
+                <div key={ci} style={{ marginLeft:ci>0?-18:0 }}><UnoCard card={c} size="small" hidden /></div>
+              ))}
+              {(gs.hands[p.idx]?.length||0)>12 && <span style={{ color:"#555", fontSize:11, alignSelf:"center", marginLeft:4 }}>+{gs.hands[p.idx].length-12}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:48 }}>
+        {botsSide.map(p => (
+          <div key={p.idx} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+            <div style={{ fontSize:12, color:p.idx===gs.currentPlayer?"#F5C518":"#555", fontWeight:p.idx===gs.currentPlayer?700:400 }}>
+              {p.name} {p.idx===gs.currentPlayer?"●":""}
+            </div>
+            <div style={{ fontSize:11, color:"#444" }}>{gs.hands[p.idx]?.length} cartes</div>
+            <div style={{ display:"flex", flexDirection:"column" }}>
+              {(gs.hands[p.idx]||[]).slice(0,8).map((c,ci) => (
+                <div key={ci} style={{ marginTop:ci>0?-32:0 }}><UnoCard card={c} size="small" hidden /></div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div style={{ textAlign:"center" }}>
+          <div onClick={isMyTurn?handleDraw:undefined} style={{ cursor:isMyTurn?"pointer":"default" }}>
+            <UnoCard card={{color:"wild",value:"wild"}} size="medium" hidden disabled={!isMyTurn} />
+          </div>
+          <div style={{ color:"#444", fontSize:11, marginTop:4 }}>{gs.deck.length} cartes</div>
+        </div>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ padding:5, borderRadius:16, background:`${topColor.bg}22`, border:`2px solid ${topColor.bg}55` }}>
+            <UnoCard card={topCard} size="medium" />
+          </div>
+          <div style={{ color:topColor.bg, fontSize:11, marginTop:4, fontWeight:700 }}>{gs.activeColor.toUpperCase()}</div>
+        </div>
+      </div>
+
+      {log.length > 0 && (
+        <div style={{ padding:"4px 20px", display:"flex", gap:8, overflowX:"auto" }}>
+          {log.slice(0,5).map((l,i) => <span key={i} style={{ fontSize:11, color:"#333", whiteSpace:"nowrap", opacity:1-i*0.18 }}>{l}</span>)}
+        </div>
+      )}
+
+      <div style={{ background:"#0c0c18", borderTop:"1px solid #1e1e2e", padding:"16px 20px 24px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <span style={{ color:isMyTurn?"#F5C518":"#444", fontSize:14, fontWeight:isMyTurn?700:400 }}>
+            {isMyTurn?"▶ Votre tour":"Vos cartes"} — {gs.hands[myPlayerIdx]?.length}
+          </span>
+          {showUno && (
+            <button onClick={() => setShowUno(false)} style={{ background:"#E8453C", color:"#fff", border:"none", padding:"8px 22px", borderRadius:10, fontWeight:800, fontSize:17, cursor:"pointer", fontFamily:"'Nunito',sans-serif" }}>UNO !</button>
+          )}
+        </div>
+        <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:8, paddingTop:4 }}>
+          {(gs.hands[myPlayerIdx]||[]).map(card => {
+            const playable = isMyTurn && canPlay(card, topCard, gs.activeColor);
+            return (
+              <div key={card.id} style={{ flexShrink:0 }}>
+                <UnoCard card={card} size="large" onClick={playable?handleCardClick:undefined} selected={selected?.id===card.id} disabled={!playable} />
+              </div>
+            );
+          })}
+        </div>
+        {selected && <div style={{ textAlign:"center", marginTop:8, color:"#555", fontSize:12 }}>Cliquez à nouveau pour jouer</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Solo Game Screen ─────────────────────────────────────────────────────────
 function GameScreen({ players, onBack }) {
-  const [gs,          setGs]         = useState(() => initGame(players));
-  const [selected,    setSelected]   = useState(null);
-  const [showPicker,  setShowPicker] = useState(false);
-  const [pendingCard, setPending]    = useState(null);
-  const [log,         setLog]        = useState([]);
-  const [showUno,     setShowUno]    = useState(false);
+  const [gs,         setGs]        = useState(() => initGame(players));
+  const [selected,   setSelected]  = useState(null);
+  const [showPicker, setShowPicker]= useState(false);
+  const [pending,    setPending]   = useState(null);
+  const [log,        setLog]       = useState([]);
+  const [showUno,    setShowUno]   = useState(false);
   const botTimer = useRef(null);
 
   const humanIdx = players.findIndex(p => p.type === "human");
   const topCard  = gs.discard[gs.discard.length - 1];
   const isMyTurn = gs.status === "playing" && gs.currentPlayer === humanIdx;
+  const addLog   = msg => setLog(l => [msg, ...l].slice(0, 10));
 
-  const addLog = msg => setLog(l => [msg, ...l].slice(0, 10));
-
-  // Bot turns
   useEffect(() => {
     if (gs.status !== "playing") return;
     const cur = gs.currentPlayer;
@@ -281,10 +500,7 @@ function GameScreen({ players, onBack }) {
         if (prev.status !== "playing" || prev.currentPlayer !== cur) return prev;
         const top  = prev.discard[prev.discard.length - 1];
         const card = botChooseCard(prev.hands[cur], top, prev.activeColor, players[cur].difficulty);
-        if (!card) {
-          addLog(`${players[cur].name} pioche`);
-          return drawCard(prev, cur);
-        }
+        if (!card) { addLog(`${players[cur].name} pioche`); return drawCard(prev, cur); }
         const col = card.color === "wild" ? botChooseColor(prev.hands[cur], players[cur].difficulty) : null;
         addLog(`${players[cur].name} joue ${card.value}${col?" → "+col:""}`);
         return applyCard(prev, cur, card, col);
@@ -293,7 +509,6 @@ function GameScreen({ players, onBack }) {
     return () => clearTimeout(botTimer.current);
   }, [gs.currentPlayer, gs.status]);
 
-  // UNO button
   useEffect(() => {
     if (gs.unoCallable && gs.unoCallBy === humanIdx) {
       setShowUno(true);
@@ -311,19 +526,8 @@ function GameScreen({ players, onBack }) {
     } else { setSelected(card); }
   };
 
-  const handleDraw = () => {
-    if (!isMyTurn) return;
-    addLog("Vous piochez");
-    setGs(drawCard(gs, humanIdx));
-  };
-
-  const handleColorPick = col => {
-    setShowPicker(false);
-    addLog(`Vous jouez ${pendingCard.value} → ${col}`);
-    setGs(applyCard(gs, humanIdx, pendingCard, col));
-    setPending(null);
-  };
-
+  const handleDraw = () => { if (!isMyTurn) return; addLog("Vous piochez"); setGs(drawCard(gs, humanIdx)); };
+  const handleColorPick = col => { setShowPicker(false); addLog(`Vous jouez ${pending.value} → ${col}`); setGs(applyCard(gs, humanIdx, pending, col)); setPending(null); };
   const restart = () => { setGs(initGame(players)); setLog([]); setSelected(null); };
 
   if (gs.status === "ended") {
@@ -347,29 +551,23 @@ function GameScreen({ players, onBack }) {
     );
   }
 
-  const topColor     = COLOR_MAP[gs.activeColor] || COLOR_MAP.wild;
-  const opponents    = players.map((p,i) => ({...p, idx:i})).filter(p => p.idx !== humanIdx);
-  const botsTop      = opponents.slice(0, Math.ceil(opponents.length / 2));
-  const botsSide     = opponents.slice(Math.ceil(opponents.length / 2));
+  const topColor  = COLOR_MAP[gs.activeColor] || COLOR_MAP.wild;
+  const opponents = players.map((p,i) => ({...p, idx:i})).filter(p => p.idx !== humanIdx);
+  const botsTop   = opponents.slice(0, Math.ceil(opponents.length / 2));
+  const botsSide  = opponents.slice(Math.ceil(opponents.length / 2));
 
   return (
     <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", flexDirection:"column", fontFamily:"'Nunito',sans-serif" }}>
       {showPicker && <ColorPicker onPick={handleColorPick} />}
-
-      {/* Top bar */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 20px", borderBottom:"1px solid #1e1e2e" }}>
-        <button onClick={onBack}  style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>← Menu</button>
+        <button onClick={onBack} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>← Menu</button>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           <div style={{ width:10, height:10, borderRadius:"50%", background:topColor.bg }} />
-          <span style={{ color:"#888", fontSize:13 }}>
-            {gs.lastAction || (isMyTurn ? "▶ Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}
-          </span>
+          <span style={{ color:"#888", fontSize:13 }}>{gs.lastAction || (isMyTurn ? "▶ Votre tour" : `Tour de ${players[gs.currentPlayer].name}`)}</span>
           <span style={{ color:"#555", fontSize:13 }}>{gs.direction===1?"↻":"↺"}</span>
         </div>
         <button onClick={restart} style={{ ...BS("outline"), flex:"none", padding:"6px 14px", fontSize:13 }}>Reset</button>
       </div>
-
-      {/* Opponents top */}
       <div style={{ display:"flex", justifyContent:"center", gap:40, padding:"14px 0 6px" }}>
         {botsTop.map(p => (
           <div key={p.idx} style={{ textAlign:"center" }}>
@@ -380,13 +578,10 @@ function GameScreen({ players, onBack }) {
               {(gs.hands[p.idx]||[]).slice(0,12).map((c,ci) => (
                 <div key={ci} style={{ marginLeft:ci>0?-18:0 }}><UnoCard card={c} size="small" hidden /></div>
               ))}
-              {(gs.hands[p.idx]?.length||0)>12 && <span style={{ color:"#555", fontSize:11, alignSelf:"center", marginLeft:4 }}>+{gs.hands[p.idx].length-12}</span>}
             </div>
           </div>
         ))}
       </div>
-
-      {/* Center */}
       <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:48 }}>
         {botsSide.map(p => (
           <div key={p.idx} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
@@ -401,16 +596,12 @@ function GameScreen({ players, onBack }) {
             </div>
           </div>
         ))}
-
-        {/* Draw pile */}
         <div style={{ textAlign:"center" }}>
           <div onClick={isMyTurn?handleDraw:undefined} style={{ cursor:isMyTurn?"pointer":"default" }}>
             <UnoCard card={{color:"wild",value:"wild"}} size="medium" hidden disabled={!isMyTurn} />
           </div>
           <div style={{ color:"#444", fontSize:11, marginTop:4 }}>{gs.deck.length} cartes</div>
         </div>
-
-        {/* Discard */}
         <div style={{ textAlign:"center" }}>
           <div style={{ padding:5, borderRadius:16, background:`${topColor.bg}22`, border:`2px solid ${topColor.bg}55` }}>
             <UnoCard card={topCard} size="medium" />
@@ -418,31 +609,20 @@ function GameScreen({ players, onBack }) {
           <div style={{ color:topColor.bg, fontSize:11, marginTop:4, fontWeight:700 }}>{gs.activeColor.toUpperCase()}</div>
         </div>
       </div>
-
-      {/* Log */}
       {log.length > 0 && (
         <div style={{ padding:"4px 20px", display:"flex", gap:8, overflowX:"auto" }}>
-          {log.slice(0,5).map((l,i) => (
-            <span key={i} style={{ fontSize:11, color:"#333", whiteSpace:"nowrap", opacity:1-i*0.18 }}>{l}</span>
-          ))}
+          {log.slice(0,5).map((l,i) => <span key={i} style={{ fontSize:11, color:"#333", whiteSpace:"nowrap", opacity:1-i*0.18 }}>{l}</span>)}
         </div>
       )}
-
-      {/* Player hand */}
       <div style={{ background:"#0c0c18", borderTop:"1px solid #1e1e2e", padding:"16px 20px 24px" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
           <span style={{ color:isMyTurn?"#F5C518":"#444", fontSize:14, fontWeight:isMyTurn?700:400 }}>
             {isMyTurn?"▶ Votre tour":"Vos cartes"} — {gs.hands[humanIdx]?.length}
           </span>
           {showUno && (
-            <button onClick={() => setShowUno(false)} style={{
-              background:"#E8453C", color:"#fff", border:"none",
-              padding:"8px 22px", borderRadius:10, fontWeight:800, fontSize:17,
-              cursor:"pointer", fontFamily:"'Nunito',sans-serif",
-            }}>UNO !</button>
+            <button onClick={() => setShowUno(false)} style={{ background:"#E8453C", color:"#fff", border:"none", padding:"8px 22px", borderRadius:10, fontWeight:800, fontSize:17, cursor:"pointer", fontFamily:"'Nunito',sans-serif" }}>UNO !</button>
           )}
         </div>
-        {/* Large cards in hand */}
         <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:8, paddingTop:4 }}>
           {(gs.hands[humanIdx]||[]).map(card => {
             const playable = isMyTurn && canPlay(card, topCard, gs.activeColor);
@@ -459,15 +639,6 @@ function GameScreen({ players, onBack }) {
   );
 }
 
-// ─── localStorage Room helpers ────────────────────────────────────────────────
-// FIX: rooms are never deleted during game start — status transitions to "started"
-// and gameState is written in. Each client polls and reacts to the status change.
-const LS       = "uno_rooms_v3";
-const getRooms = ()        => { try { return JSON.parse(localStorage.getItem(LS)||"{}"); } catch { return {}; } };
-const getRoom  = code      => getRooms()[code] || null;
-const putRoom  = (code, r) => { const all = getRooms(); all[code] = r; localStorage.setItem(LS, JSON.stringify(all)); };
-const delRoom  = code      => { const all = getRooms(); delete all[code]; localStorage.setItem(LS, JSON.stringify(all)); };
-
 // ─── Multiplayer Lobby ────────────────────────────────────────────────────────
 function MultiplayerLobby({ onStartGame, onBack }) {
   const [view,       setView]       = useState("menu");
@@ -476,25 +647,21 @@ function MultiplayerLobby({ onStartGame, onBack }) {
   const [myRoom,     setMyRoom]     = useState(null);
   const [roomData,   setRoomData]   = useState(null);
   const [error,      setError]      = useState("");
-  const pollRef = useRef(null);
+  const pollRef   = useRef(null);
   const myNameRef = useRef("");
+  const myIdxRef  = useRef(0);
 
-  // Poll localStorage every 800ms so lobby & game-start update across tabs
   useEffect(() => {
     if (!myRoom) return;
-
     const poll = () => {
       const r = getRoom(myRoom);
       if (!r) return;
       setRoomData({...r});
-
-      // FIX: detect when host has started the game
       if (r.status === "started") {
         clearInterval(pollRef.current);
-        onStartGame(r.players);
+        onStartGame(r.players, myIdxRef.current, myRoom);
       }
     };
-
     poll();
     pollRef.current = setInterval(poll, 800);
     return () => clearInterval(pollRef.current);
@@ -506,6 +673,7 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     const room = { code, host: playerName.trim(), players:[{name:playerName.trim(),type:"human"}], status:"waiting" };
     putRoom(code, room);
     myNameRef.current = playerName.trim();
+    myIdxRef.current  = 0;
     setMyRoom(code); setRoomData(room); setView("room"); setError("");
   };
 
@@ -514,13 +682,15 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     const code = roomCode.trim().toUpperCase();
     if (!code) { setError("Entrez un code"); return; }
     const r = getRoom(code);
-    if (!r)                    { setError("Salle introuvable — vérifiez le code"); return; }
-    if (r.players.length >= 4) { setError("Salle pleine (4/4)"); return; }
-    if (r.status !== "waiting"){ setError("Partie déjà lancée"); return; }
-    if (r.players.find(p => p.name === playerName.trim())) { setError("Ce nom est déjà pris dans cette salle"); return; }
-    r.players.push({name:playerName.trim(),type:"human"});
+    if (!r)                     { setError("Salle introuvable — vérifiez le code"); return; }
+    if (r.players.length >= 4)  { setError("Salle pleine (4/4)"); return; }
+    if (r.status !== "waiting") { setError("Partie déjà lancée"); return; }
+    if (r.players.find(p => p.name === playerName.trim())) { setError("Ce nom est déjà pris"); return; }
+    const newIdx = r.players.length;
+    r.players.push({name:playerName.trim(), type:"human"});
     putRoom(code, r);
     myNameRef.current = playerName.trim();
+    myIdxRef.current  = newIdx;
     setMyRoom(code); setRoomData(r); setView("room"); setError("");
   };
 
@@ -528,14 +698,14 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     const r = getRoom(myRoom);
     if (!r) { setError("Salle introuvable"); return; }
     if (r.players.length < 2) { setError("Il faut au moins 2 joueurs"); return; }
-    // FIX: set status to "started" so other tabs pick it up; DON'T delete the room yet
+    // Host generates ONE shared game state and writes it before flipping status
+    const gs = initGame(r.players);
+    putGameState(myRoom, gs);
     r.status = "started";
     putRoom(myRoom, r);
-    // Host also starts immediately
+    setTimeout(() => delRoom(myRoom), 8000);
     clearInterval(pollRef.current);
-    // Clean up after a delay so other tabs have time to read it
-    setTimeout(() => delRoom(myRoom), 5000);
-    onStartGame(r.players);
+    onStartGame(r.players, 0, myRoom);
   };
 
   const leaveRoom = () => {
@@ -543,8 +713,8 @@ function MultiplayerLobby({ onStartGame, onBack }) {
     if (myRoom) {
       const r = getRoom(myRoom);
       if (r) {
-        if (r.host === (myNameRef.current || playerName.trim())) delRoom(myRoom);
-        else { r.players = r.players.filter(p => p.name !== (myNameRef.current || playerName.trim())); putRoom(myRoom, r); }
+        if (r.host === myNameRef.current) { delRoom(myRoom); delGameState(myRoom); }
+        else { r.players = r.players.filter(p => p.name !== myNameRef.current); putRoom(myRoom, r); }
       }
     }
     setMyRoom(null); setRoomData(null); setView("menu"); setError("");
@@ -574,13 +744,13 @@ function MultiplayerLobby({ onStartGame, onBack }) {
       {error && <div style={{ color:"#E8453C", fontSize:13 }}>{error}</div>}
       <div style={{ display:"flex", gap:12 }}>
         <button onClick={leaveRoom} style={BS("outline")}>Quitter</button>
-        {room.host === (myNameRef.current || playerName.trim()) && (
+        {room.host === myNameRef.current && (
           <button onClick={startGame} disabled={room.players.length < 2} style={BS("primary", room.players.length < 2)}>
             Lancer la partie
           </button>
         )}
       </div>
-      {room.host !== (myNameRef.current || playerName.trim()) && (
+      {room.host !== myNameRef.current && (
         <div style={{ textAlign:"center", color:"#555", fontSize:13 }}>En attente de l'hôte…</div>
       )}
     </div>
@@ -701,13 +871,11 @@ function HomeScreen({ onNav }) {
         <h1 style={{ fontSize:50, fontWeight:900, margin:0, color:"#fff", letterSpacing:-2, fontFamily:"'Nunito',sans-serif" }}>uno</h1>
         <p style={{ color:"#444", margin:"8px 0 0", fontSize:14 }}>La version épurée du classique</p>
       </div>
-
       <div style={{ display:"flex", gap:10, marginBottom:44, transform:"rotate(-1.5deg)" }}>
         {[{color:"red",value:"7"},{color:"yellow",value:"skip"},{color:"blue",value:"draw2"},{color:"green",value:"reverse"},{color:"wild",value:"wild"}].map((c,i) => (
           <div key={i} style={{ transform:`rotate(${(i-2)*6}deg)` }}><UnoCard card={c} size="medium" /></div>
         ))}
       </div>
-
       <div style={{ display:"flex", flexDirection:"column", gap:12, width:"100%", maxWidth:300 }}>
         <button onClick={() => onNav("solo")} style={{
           background:"linear-gradient(135deg,#E8453C,#C0392B)", border:"none", borderRadius:16,
@@ -724,7 +892,6 @@ function HomeScreen({ onNav }) {
           boxShadow:"0 4px 20px rgba(41,128,185,.3)",
         }}>Multijoueur <span style={{fontSize:22}}>👥</span></button>
       </div>
-
       <div style={{ marginTop:36, padding:"18px 22px", background:"#0c0c18", borderRadius:14, maxWidth:360, width:"100%", border:"1px solid #1e1e2e" }}>
         <div style={{ fontSize:11, color:"#444", fontWeight:700, marginBottom:10, textTransform:"uppercase", letterSpacing:1 }}>Règles rapides</div>
         {[["⊘","Skip — saute le joueur suivant"],["⇄","Reverse — inverse le sens"],
@@ -742,13 +909,18 @@ function HomeScreen({ onNav }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen,  setScreen]  = useState("home");
-  const [players, setPlayers] = useState(null);
+  const [screen,   setScreen]   = useState("home");
+  const [players,  setPlayers]  = useState(null);
+  const [myIdx,    setMyIdx]    = useState(0);
+  const [roomCode, setRoomCode] = useState(null);
 
-  const startGame = p => { setPlayers(p); setScreen("game"); };
+  const startSolo  = (p)            => { setPlayers(p); setMyIdx(0); setRoomCode(null); setScreen("game"); };
+  const startMulti = (p, idx, code) => { setPlayers(p); setMyIdx(idx); setRoomCode(code); setScreen("game"); };
 
-  if (screen === "game" && players)
+  if (screen === "game" && players) {
+    if (roomCode) return <MultiGameScreen players={players} myPlayerIdx={myIdx} roomCode={roomCode} onBack={() => setScreen("home")} />;
     return <GameScreen players={players} onBack={() => setScreen("home")} />;
+  }
 
   return (
     <div style={{ minHeight:"100vh", background:"#0f0f1a", display:"flex", flexDirection:"column",
@@ -756,8 +928,8 @@ export default function App() {
       <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
       <div style={{ width:"100%", maxWidth:480 }}>
         {screen==="home"  && <HomeScreen onNav={setScreen} />}
-        {screen==="solo"  && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><SoloSetup onStartGame={startGame} onBack={() => setScreen("home")} /></div>}
-        {screen==="multi" && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><MultiplayerLobby onStartGame={startGame} onBack={() => setScreen("home")} /></div>}
+        {screen==="solo"  && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><SoloSetup onStartGame={startSolo} onBack={() => setScreen("home")} /></div>}
+        {screen==="multi" && <div style={{ background:"#111", borderRadius:22, padding:"28px 26px" }}><MultiplayerLobby onStartGame={startMulti} onBack={() => setScreen("home")} /></div>}
       </div>
     </div>
   );
